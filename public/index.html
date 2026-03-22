@@ -8,66 +8,99 @@
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, 'Pretendard', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; }
 
-  .header { background: linear-gradient(135deg, #161b22 0%, #0d1117 100%); border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
-  .header h1 { font-size: 20px; font-weight: 700; }
+  .header { background: #161b22; border-bottom: 1px solid #30363d; padding: 14px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 18px; font-weight: 700; }
   .header h1 span { color: #f0883e; }
-  .header .status { display: flex; gap: 12px; align-items: center; }
+  .status-bar { display: flex; gap: 10px; align-items: center; }
   .badge { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
   .badge.on { background: #23863620; color: #3fb950; border: 1px solid #23863640; }
   .badge.off { background: #da363420; color: #f85149; border: 1px solid #da363440; }
 
-  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+  .container { max-width: 1280px; margin: 0 auto; padding: 16px; }
 
-  /* 카드 */
-  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
-  .card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 16px; }
-  .card .label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
-  .card .value { font-size: 24px; font-weight: 700; }
-  .card .value.green { color: #3fb950; }
-  .card .value.red { color: #f85149; }
-  .card .sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
+  /* ── 메인 PnL 히어로 ── */
+  .hero { background: linear-gradient(135deg, #161b22, #1c2333); border: 1px solid #30363d; border-radius: 16px; padding: 24px; margin-bottom: 16px; display: grid; grid-template-columns: 1fr 1px 1fr 1px 1fr; gap: 0; align-items: center; }
+  .hero-divider { background: #30363d; height: 60px; }
+  .hero-item { text-align: center; }
+  .hero-label { font-size: 12px; color: #8b949e; margin-bottom: 6px; letter-spacing: 0.5px; }
+  .hero-value { font-size: 32px; font-weight: 800; }
+  .hero-sub { font-size: 13px; color: #8b949e; margin-top: 4px; }
+  .green { color: #3fb950; }
+  .red { color: #f85149; }
+  .yellow { color: #d29922; }
+  .white { color: #e6edf3; }
 
-  /* 버튼 */
-  .btn-group { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
-  .btn { padding: 8px 16px; border: 1px solid #30363d; border-radius: 8px; background: #21262d; color: #e6edf3; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
+  /* ── 미니 카드 그리드 ── */
+  .mini-cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 16px; }
+  .mini-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 12px 14px; }
+  .mini-card .label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
+  .mini-card .val { font-size: 18px; font-weight: 700; margin-top: 2px; }
+
+  /* ── 버튼 ── */
+  .btn-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
+  .btn { padding: 8px 16px; border: 1px solid #30363d; border-radius: 8px; background: #21262d; color: #e6edf3; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s; }
   .btn:hover { background: #30363d; }
-  .btn.primary { background: #238636; border-color: #238636; }
-  .btn.primary:hover { background: #2ea043; }
-  .btn.danger { background: #da3634; border-color: #da3634; }
-  .btn.danger:hover { background: #f85149; }
-  .btn.warning { background: #9e6a03; border-color: #9e6a03; }
+  .btn.on { background: #238636; border-color: #238636; }
+  .btn.on:hover { background: #2ea043; }
+  .btn.danger { background: #da363480; border-color: #da3634; }
+  .btn.warn { background: #9e6a0380; border-color: #9e6a03; }
 
-  /* 섹션 */
+  /* ── 2컬럼 레이아웃 ── */
+  .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
+
+  /* ── 섹션 ── */
   .section { background: #161b22; border: 1px solid #30363d; border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
-  .section-title { padding: 12px 16px; font-size: 14px; font-weight: 600; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
-  .section-title .count { background: #30363d; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+  .sec-head { padding: 10px 14px; font-size: 13px; font-weight: 600; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
+  .sec-head .cnt { background: #30363d; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
 
-  /* 테이블 */
-  table { width: 100%; border-collapse: collapse; font-size: 13px; }
-  th { text-align: left; padding: 8px 12px; color: #8b949e; font-weight: 500; border-bottom: 1px solid #30363d; font-size: 11px; text-transform: uppercase; }
-  td { padding: 8px 12px; border-bottom: 1px solid #21262d; }
+  /* ── 테이블 ── */
+  table { width: 100%; border-collapse: collapse; font-size: 12px; }
+  th { text-align: left; padding: 6px 10px; color: #8b949e; font-weight: 500; border-bottom: 1px solid #30363d; font-size: 10px; text-transform: uppercase; }
+  td { padding: 7px 10px; border-bottom: 1px solid #21262d; }
   tr:hover { background: #1c2128; }
-  .pnl-pos { color: #3fb950; }
-  .pnl-neg { color: #f85149; }
 
-  /* 로그 */
-  .log-area { max-height: 300px; overflow-y: auto; padding: 8px; }
-  .log-entry { padding: 4px 8px; font-size: 12px; font-family: 'SF Mono', monospace; border-bottom: 1px solid #21262d; }
-  .log-entry .time { color: #8b949e; margin-right: 8px; }
-  .log-entry.error { color: #f85149; }
-  .log-entry.warn { color: #d29922; }
-  .log-entry.trade { color: #3fb950; }
+  /* ── 포지션 카드 ── */
+  .pos-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; padding: 12px; }
+  .pos-card { background: #0d1117; border: 1px solid #30363d; border-radius: 10px; padding: 12px; }
+  .pos-card.profit { border-color: #23863660; }
+  .pos-card.loss { border-color: #da363460; }
+  .pos-coin { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
+  .pos-pnl { font-size: 22px; font-weight: 800; }
+  .pos-detail { font-size: 11px; color: #8b949e; margin-top: 6px; line-height: 1.6; }
+  .pos-bar { height: 4px; border-radius: 2px; margin-top: 8px; background: #30363d; overflow: hidden; }
+  .pos-bar-fill { height: 100%; border-radius: 2px; }
+  .pos-bar-fill.tp { background: #3fb950; }
+  .pos-bar-fill.sl { background: #f85149; }
 
-  /* OB 표시 */
-  .ob-zone { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
-  .ob-zone.active { background: #23863620; color: #3fb950; border: 1px solid #23863640; }
+  /* ── OB 뱃지 ── */
+  .ob-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; background: #23863620; color: #3fb950; border: 1px solid #23863640; margin: 1px; }
 
-  /* 반응형 */
+  /* ── 로그 ── */
+  .log-area { max-height: 250px; overflow-y: auto; padding: 6px; }
+  .log-line { padding: 3px 8px; font-size: 11px; font-family: 'SF Mono', 'Menlo', monospace; border-bottom: 1px solid #21262d; line-height: 1.5; }
+  .log-line .t { color: #8b949e; margin-right: 6px; }
+  .log-line.error { color: #f85149; }
+  .log-line.warn { color: #d29922; }
+  .log-line.trade { color: #3fb950; }
+
+  /* ── 일별 바 차트 ── */
+  .daily-bar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid #21262d; font-size: 12px; }
+  .daily-bar .date { width: 80px; color: #8b949e; }
+  .daily-bar .trades { width: 40px; color: #8b949e; text-align: center; }
+  .daily-bar .bar-wrap { flex: 1; height: 18px; position: relative; }
+  .daily-bar .bar { height: 100%; border-radius: 3px; min-width: 2px; }
+  .daily-bar .bar.pos { background: #238636; }
+  .daily-bar .bar.neg { background: #da3634; }
+  .daily-bar .pnl-text { width: 90px; text-align: right; font-weight: 600; }
+
+  .empty-msg { text-align: center; color: #8b949e; padding: 24px; font-size: 13px; }
+
   @media (max-width: 768px) {
-    .cards { grid-template-columns: repeat(2, 1fr); }
-    .header { flex-direction: column; gap: 8px; }
-    table { font-size: 11px; }
-    th, td { padding: 6px 8px; }
+    .hero { grid-template-columns: 1fr; gap: 16px; }
+    .hero-divider { display: none; }
+    .mini-cards { grid-template-columns: repeat(3, 1fr); }
+    .grid-2 { grid-template-columns: 1fr; }
+    .hero-value { font-size: 24px; }
   }
 </style>
 </head>
@@ -75,110 +108,137 @@
 
 <div class="header">
   <h1>🪙 <span>24번트</span> 코인 스캘핑</h1>
-  <div class="status">
+  <div class="status-bar">
     <span id="tradingBadge" class="badge off">OFF</span>
-    <span id="wsStatus" class="badge off">연결 중...</span>
+    <span id="wsStatus" class="badge off">연결 중</span>
   </div>
 </div>
 
 <div class="container">
 
-  <!-- 요약 카드 -->
-  <div class="cards">
-    <div class="card">
-      <div class="label">가용 자금</div>
-      <div class="value" id="cash">-</div>
+  <!-- 메인 히어로: 핵심 수익 지표 -->
+  <div class="hero">
+    <div class="hero-item">
+      <div class="hero-label">오늘 수익</div>
+      <div class="hero-value" id="todayPnl">0원</div>
+      <div class="hero-sub" id="todayTrades">0건 거래</div>
     </div>
-    <div class="card">
-      <div class="label">누적 손익</div>
-      <div class="value" id="totalPnl">-</div>
+    <div class="hero-divider"></div>
+    <div class="hero-item">
+      <div class="hero-label">누적 수익</div>
+      <div class="hero-value" id="totalPnl">0원</div>
+      <div class="hero-sub" id="totalReturn">수익률 0%</div>
     </div>
-    <div class="card">
+    <div class="hero-divider"></div>
+    <div class="hero-item">
+      <div class="hero-label">업비트 잔고</div>
+      <div class="hero-value white" id="realBalance">-</div>
+      <div class="hero-sub" id="realTotal">총 자산 -</div>
+    </div>
+  </div>
+
+  <!-- 미니 카드 -->
+  <div class="mini-cards">
+    <div class="mini-card">
       <div class="label">승률</div>
-      <div class="value" id="winRate">-</div>
-      <div class="sub" id="winLoss">-</div>
+      <div class="val" id="winRate">0%</div>
     </div>
-    <div class="card">
+    <div class="mini-card">
+      <div class="label">승/패</div>
+      <div class="val" id="winLoss">0/0</div>
+    </div>
+    <div class="mini-card">
       <div class="label">총 거래</div>
-      <div class="value" id="totalTrades">-</div>
+      <div class="val" id="totalTrades">0</div>
     </div>
-    <div class="card">
+    <div class="mini-card">
       <div class="label">보유 포지션</div>
-      <div class="value" id="posCount">-</div>
+      <div class="val" id="posCount">0</div>
     </div>
-    <div class="card">
+    <div class="mini-card">
+      <div class="label">감시 코인</div>
+      <div class="val" id="watchCount">0</div>
+    </div>
+    <div class="mini-card">
       <div class="label">활성 OB</div>
-      <div class="value" id="obCount">-</div>
+      <div class="val" id="obCount">0</div>
     </div>
   </div>
 
   <!-- 버튼 -->
-  <div class="btn-group">
-    <button class="btn primary" onclick="toggleTrading()">자동매매 ON/OFF</button>
+  <div class="btn-row">
+    <button class="btn" id="tradingBtn" onclick="toggleTrading()">자동매매 ON/OFF</button>
     <button class="btn" onclick="forceScan()">종목 재스캔</button>
     <button class="btn danger" onclick="sellAll()">전체 매도</button>
-    <button class="btn warning" onclick="resetState()">초기화</button>
+    <button class="btn warn" onclick="resetState()">초기화</button>
   </div>
 
-  <!-- 보유 포지션 -->
+  <!-- 보유 포지션 (카드형) -->
   <div class="section">
-    <div class="section-title">보유 포지션 <span class="count" id="posCountBadge">0</span></div>
-    <table>
-      <thead><tr>
-        <th>코인</th><th>진입가</th><th>현재가</th><th>수익률</th><th>TP</th><th>SL</th><th>보유시간</th>
-      </tr></thead>
-      <tbody id="positionsTable"></tbody>
-    </table>
+    <div class="sec-head">보유 포지션 <span class="cnt" id="posBadge">0</span></div>
+    <div id="posArea" class="pos-cards">
+      <div class="empty-msg">대기 중 — OB 터치 시 자동 매수</div>
+    </div>
   </div>
 
-  <!-- 감시 코인 + OB -->
-  <div class="section">
-    <div class="section-title">감시 코인 & 오더블록 <span class="count" id="watchCount">0</span></div>
-    <table>
-      <thead><tr>
-        <th>코인</th><th>현재가</th><th>24h 변동</th><th>거래대금</th><th>활성 OB</th>
-      </tr></thead>
-      <tbody id="watchlistTable"></tbody>
-    </table>
+  <!-- 2컬럼: 일별 수익 + 실시간 로그 -->
+  <div class="grid-2">
+    <!-- 일별 수익 바 차트 -->
+    <div class="section">
+      <div class="sec-head">일별 손익</div>
+      <div id="dailyBars" style="max-height:300px; overflow-y:auto;">
+        <div class="empty-msg">아직 거래 내역 없음</div>
+      </div>
+    </div>
+
+    <!-- 실시간 로그 -->
+    <div class="section">
+      <div class="sec-head">실시간 로그</div>
+      <div class="log-area" id="logArea"></div>
+    </div>
   </div>
 
-  <!-- 일별 수익 -->
-  <div class="section">
-    <div class="section-title">일별 손익</div>
-    <table>
-      <thead><tr><th>날짜</th><th>거래</th><th>손익</th></tr></thead>
-      <tbody id="dailyTable"></tbody>
-    </table>
-  </div>
+  <!-- 2컬럼: 업비트 보유 + 감시 코인 -->
+  <div class="grid-2">
+    <!-- 실제 업비트 보유 -->
+    <div class="section">
+      <div class="sec-head">업비트 보유 코인 <span class="cnt" style="cursor:pointer" onclick="loadBalance()">새로고침</span></div>
+      <table>
+        <thead><tr><th>코인</th><th>수량</th><th>평가금액</th><th>수익률</th></tr></thead>
+        <tbody id="holdingsTable"><tr><td colspan="4" class="empty-msg">로딩 중...</td></tr></tbody>
+      </table>
+    </div>
 
-  <!-- 로그 -->
-  <div class="section">
-    <div class="section-title">실시간 로그</div>
-    <div class="log-area" id="logArea"></div>
+    <!-- 감시 코인 + OB -->
+    <div class="section">
+      <div class="sec-head">감시 코인 & 오더블록 <span class="cnt" id="watchBadge">0</span></div>
+      <div style="max-height:400px; overflow-y:auto;">
+      <table>
+        <thead><tr><th>코인</th><th>현재가</th><th>거래대금</th><th>활성 OB</th></tr></thead>
+        <tbody id="watchTable"></tbody>
+      </table>
+      </div>
+    </div>
   </div>
 
 </div>
 
 <script>
-let ws;
-let state = {};
+let ws, state = {};
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}`);
-
   ws.onopen = () => {
     document.getElementById('wsStatus').className = 'badge on';
     document.getElementById('wsStatus').textContent = '실시간';
   };
-
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'state') updateState(msg.data);
     if (msg.type === 'log') addLog(msg.data);
     if (msg.type === 'logs') msg.data.forEach(addLog);
   };
-
   ws.onclose = () => {
     document.getElementById('wsStatus').className = 'badge off';
     document.getElementById('wsStatus').textContent = '재연결...';
@@ -189,105 +249,160 @@ function connectWS() {
 function updateState(s) {
   state = s;
 
-  // 카드
-  document.getElementById('cash').textContent = s.cash.toLocaleString() + '원';
-  const pnlEl = document.getElementById('totalPnl');
-  pnlEl.textContent = (s.totalPnl > 0 ? '+' : '') + s.totalPnl.toLocaleString() + '원';
-  pnlEl.className = 'value ' + (s.totalPnl >= 0 ? 'green' : 'red');
+  // 자동매매 뱃지
+  const tb = document.getElementById('tradingBadge');
+  tb.className = 'badge ' + (s.autoTrading ? 'on' : 'off');
+  tb.textContent = s.autoTrading ? 'ON' : 'OFF';
+  const btn = document.getElementById('tradingBtn');
+  btn.className = 'btn ' + (s.autoTrading ? 'on' : '');
 
+  // 오늘 수익
+  const today = new Date().toISOString().slice(0, 10);
+  const todayData = (s.dailyPnl || []).find(d => d.date === today);
+  const todayPnlVal = todayData ? todayData.pnl : 0;
+  const todayEl = document.getElementById('todayPnl');
+  todayEl.textContent = (todayPnlVal > 0 ? '+' : '') + Math.round(todayPnlVal).toLocaleString() + '원';
+  todayEl.className = 'hero-value ' + (todayPnlVal >= 0 ? 'green' : 'red');
+  document.getElementById('todayTrades').textContent = (todayData ? todayData.trades : 0) + '건 거래';
+
+  // 누적 수익
+  const tpEl = document.getElementById('totalPnl');
+  tpEl.textContent = (s.totalPnl > 0 ? '+' : '') + s.totalPnl.toLocaleString() + '원';
+  tpEl.className = 'hero-value ' + (s.totalPnl >= 0 ? 'green' : 'red');
+  const initCap = 100000;
+  const retPct = initCap > 0 ? (s.totalPnl / initCap * 100).toFixed(2) : 0;
+  document.getElementById('totalReturn').textContent = `수익률 ${retPct > 0 ? '+' : ''}${retPct}%`;
+
+  // 미니 카드
   document.getElementById('winRate').textContent = s.winRate + '%';
-  document.getElementById('winLoss').textContent = `${s.wins}승 ${s.losses}패`;
+  document.getElementById('winLoss').textContent = `${s.wins}/${s.losses}`;
   document.getElementById('totalTrades').textContent = s.totalTrades;
   document.getElementById('posCount').textContent = s.positions.length;
-
+  document.getElementById('watchCount').textContent = s.watchlist.length;
   const obTotal = Object.values(s.activeOBs || {}).reduce((sum, arr) => sum + arr.length, 0);
   document.getElementById('obCount').textContent = obTotal;
 
-  // 자동매매 배지
-  const badge = document.getElementById('tradingBadge');
-  badge.className = 'badge ' + (s.autoTrading ? 'on' : 'off');
-  badge.textContent = s.autoTrading ? 'ON' : 'OFF';
-
-  // 포지션 테이블
-  const posTable = document.getElementById('positionsTable');
-  document.getElementById('posCountBadge').textContent = s.positions.length;
+  // 포지션 카드
+  const posArea = document.getElementById('posArea');
+  document.getElementById('posBadge').textContent = s.positions.length;
   if (s.positions.length === 0) {
-    posTable.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#8b949e;padding:20px">보유 포지션 없음</td></tr>';
+    posArea.innerHTML = '<div class="empty-msg">대기 중 — OB 터치 시 자동 매수</div>';
   } else {
-    posTable.innerHTML = s.positions.map(p => {
+    posArea.innerHTML = s.positions.map(p => {
       const holdMin = Math.round((Date.now() - new Date(p.entryTime).getTime()) / 60000);
-      const pnlClass = p.unrealizedPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-      return `<tr>
-        <td><strong>${p.coin}</strong></td>
-        <td>${p.entryPrice.toLocaleString()}</td>
-        <td>${(p.currentPrice || p.entryPrice).toLocaleString()}</td>
-        <td class="${pnlClass}">${p.unrealizedPnl > 0 ? '+' : ''}${p.unrealizedPnl}%</td>
-        <td class="pnl-pos">${p.tpPrice.toLocaleString()}</td>
-        <td class="pnl-neg">${p.slPrice.toLocaleString()}</td>
-        <td>${holdMin}분</td>
-      </tr>`;
+      const pnlPct = p.unrealizedPnl || 0;
+      const pnlAmt = Math.round(p.amount * pnlPct / 100);
+      const cls = pnlPct >= 0 ? 'profit' : 'loss';
+      const pnlCls = pnlPct >= 0 ? 'green' : 'red';
+
+      // TP/SL까지 진행률 바
+      const range = p.tpPrice - p.slPrice;
+      const current = (p.currentPrice || p.entryPrice) - p.slPrice;
+      const pct = range > 0 ? Math.max(0, Math.min(100, current / range * 100)) : 50;
+      const barCls = pct > 50 ? 'tp' : 'sl';
+
+      return `<div class="pos-card ${cls}">
+        <div class="pos-coin">${p.coin}</div>
+        <div class="pos-pnl ${pnlCls}">${pnlPct > 0 ? '+' : ''}${pnlPct}% <span style="font-size:14px">(${pnlAmt > 0 ? '+' : ''}${pnlAmt.toLocaleString()}원)</span></div>
+        <div class="pos-detail">
+          진입 ${p.entryPrice.toLocaleString()} → 현재 ${(p.currentPrice || p.entryPrice).toLocaleString()}<br>
+          TP <span class="green">${p.tpPrice.toLocaleString()}</span> | SL <span class="red">${p.slPrice.toLocaleString()}</span><br>
+          투자 ${p.amount.toLocaleString()}원 | ${holdMin}분 보유
+        </div>
+        <div class="pos-bar"><div class="pos-bar-fill ${barCls}" style="width:${pct}%"></div></div>
+      </div>`;
+    }).join('');
+  }
+
+  // 일별 바 차트
+  const dailyBars = document.getElementById('dailyBars');
+  const daily = s.dailyPnl || [];
+  if (daily.length === 0) {
+    dailyBars.innerHTML = '<div class="empty-msg">아직 거래 내역 없음</div>';
+  } else {
+    const maxPnl = Math.max(...daily.map(d => Math.abs(d.pnl)), 1);
+    dailyBars.innerHTML = daily.slice(0, 30).map(d => {
+      const pct = Math.abs(d.pnl) / maxPnl * 100;
+      const cls = d.pnl >= 0 ? 'pos' : 'neg';
+      const pnlCls = d.pnl >= 0 ? 'green' : 'red';
+      return `<div class="daily-bar">
+        <span class="date">${d.date.slice(5)}</span>
+        <span class="trades">${d.trades}건</span>
+        <div class="bar-wrap"><div class="bar ${cls}" style="width:${Math.max(pct, 3)}%"></div></div>
+        <span class="pnl-text ${pnlCls}">${d.pnl > 0 ? '+' : ''}${Math.round(d.pnl).toLocaleString()}원</span>
+      </div>`;
     }).join('');
   }
 
   // 감시 테이블
-  const watchTable = document.getElementById('watchlistTable');
-  document.getElementById('watchCount').textContent = s.watchlist.length;
-  watchTable.innerHTML = (s.watchlist || []).map(w => {
+  const wt = document.getElementById('watchTable');
+  document.getElementById('watchBadge').textContent = s.watchlist.length;
+  wt.innerHTML = (s.watchlist || []).map(w => {
     const obs = (s.activeOBs || {})[w.coin] || [];
     const obHtml = obs.length > 0
-      ? obs.map(o => `<span class="ob-zone active">${o.bottom.toLocaleString()}~${o.top.toLocaleString()}</span>`).join(' ')
-      : '<span style="color:#8b949e">없음</span>';
+      ? obs.slice(0, 5).map(o => `<span class="ob-badge">${o.bottom.toLocaleString()}~${o.top.toLocaleString()}</span>`).join(' ') + (obs.length > 5 ? ` <span style="color:#8b949e;font-size:10px">+${obs.length-5}</span>` : '')
+      : '<span style="color:#484f58">-</span>';
     const vol = (w.volume24h / 1e8).toFixed(0);
+    const cp = latestPrices[w.market];
     return `<tr>
       <td><strong>${w.coin}</strong></td>
-      <td>${w.price ? w.price.toLocaleString() : '-'}</td>
-      <td>-</td>
+      <td>${cp ? cp.toLocaleString() : w.price.toLocaleString()}</td>
       <td>${vol}억</td>
       <td>${obHtml}</td>
     </tr>`;
   }).join('');
-
-  // 일별 손익
-  const dailyTable = document.getElementById('dailyTable');
-  dailyTable.innerHTML = (s.dailyPnl || []).slice(0, 14).map(d => {
-    const pnlClass = d.pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
-    return `<tr>
-      <td>${d.date}</td>
-      <td>${d.trades}건</td>
-      <td class="${pnlClass}">${d.pnl > 0 ? '+' : ''}${Math.round(d.pnl).toLocaleString()}원</td>
-    </tr>`;
-  }).join('') || '<tr><td colspan="3" style="text-align:center;color:#8b949e;padding:20px">데이터 없음</td></tr>';
 }
+
+const latestPrices = {};
 
 function addLog(entry) {
   const area = document.getElementById('logArea');
   const div = document.createElement('div');
-  div.className = 'log-entry ' + (entry.level || '');
-  div.innerHTML = `<span class="time">${entry.time}</span>${entry.msg}`;
+  div.className = 'log-line ' + (entry.level || '');
+  div.innerHTML = `<span class="t">${entry.time}</span>${entry.msg}`;
   area.prepend(div);
   while (area.children.length > 200) area.removeChild(area.lastChild);
 }
 
-async function toggleTrading() {
-  await fetch('/api/toggle-trading', { method: 'POST' });
+async function loadBalance() {
+  try {
+    const res = await fetch('/api/balance');
+    const b = await res.json();
+    if (b.error) return;
+    document.getElementById('realBalance').textContent = b.krw.toLocaleString() + '원';
+    document.getElementById('realTotal').textContent = '총 자산 ' + b.totalAsset.toLocaleString() + '원';
+    const ht = document.getElementById('holdingsTable');
+    if (b.holdings.length === 0) {
+      ht.innerHTML = '<tr><td colspan="4" class="empty-msg">보유 코인 없음</td></tr>';
+    } else {
+      ht.innerHTML = b.holdings.filter(h => h.evalAmount > 10).map(h => {
+        const cls = h.pnlPct >= 0 ? 'green' : 'red';
+        return `<tr>
+          <td><strong>${h.currency}</strong></td>
+          <td>${h.balance < 1 ? h.balance.toFixed(6) : h.balance.toFixed(2)}</td>
+          <td>${h.evalAmount.toLocaleString()}원</td>
+          <td class="${cls}">${h.pnlPct > 0 ? '+' : ''}${h.pnlPct}%</td>
+        </tr>`;
+      }).join('');
+    }
+  } catch {}
 }
 
-async function forceScan() {
-  await fetch('/api/force-scan', { method: 'POST' });
-}
-
+async function toggleTrading() { await fetch('/api/toggle-trading', { method: 'POST' }); }
+async function forceScan() { await fetch('/api/force-scan', { method: 'POST' }); }
 async function sellAll() {
   if (!confirm('모든 포지션을 즉시 매도하시겠습니까?')) return;
   await fetch('/api/sell-all', { method: 'POST' });
 }
-
 async function resetState() {
-  if (!confirm('모든 상태를 초기화하시겠습니까? (거래 기록은 유지됩니다)')) return;
+  if (!confirm('모든 상태를 초기화하시겠습니까?')) return;
   await fetch('/api/reset', { method: 'POST' });
   location.reload();
 }
 
 connectWS();
+loadBalance();
+setInterval(loadBalance, 30000);
 </script>
 </body>
 </html>
