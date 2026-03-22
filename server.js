@@ -216,6 +216,62 @@ async function updateAllOBs() {
   broadcastToClients({ type: 'state', data: getPublicState() });
 }
 
+// ── [FIX #9] 거래량 활성도 체크 ──────────────────
+// 최근 1시간 거래량 / 직전 1시간 거래량 >= 1.2x 인지 확인
+async function checkVolumeActivity(market) {
+  try {
+    const rawCandles = await upbit.getCandles(market, 5, 24); // 최근 2시간 (24 × 5분)
+    if (!rawCandles || rawCandles.length < 24) return true; // 데이터 부족 시 통과
+
+    // 최근 12봉(1시간) 거래량
+    let recentVol = 0;
+    for (let i = 0; i < 12; i++) recentVol += rawCandles[i].candle_acc_trade_volume || 0;
+
+    // 직전 12봉(1시간) 거래량
+    let prevVol = 0;
+    for (let i = 12; i < 24; i++) prevVol += rawCandles[i].candle_acc_trade_volume || 0;
+
+    if (prevVol <= 0) return true;
+    const ratio = recentVol / prevVol;
+    return ratio >= 1.2;
+  } catch {
+    return true; // API 에러 시 통과
+  }
+}
+
+// ── [FIX #10] 1시간봉 추세 확인 (MTF 크로스체크) ──
+// 1H MA(6) 위 + 1H 고점이 연속 하락이 아닌지 확인
+async function check1HTrend(market) {
+  try {
+    const rawCandles = await upbit.getCandles(market, 60, 10); // 1시간봉 10개
+    if (!rawCandles || rawCandles.length < 7) return true;
+
+    const candles = rawCandles
+      .map(c => ({ close: c.trade_price, high: c.high_price }))
+      .reverse(); // 오래된 순으로 정렬
+
+    const len = candles.length;
+
+    // 6시간 MA 계산
+    let maSum = 0;
+    for (let i = len - 6; i < len; i++) maSum += candles[i].close;
+    const ma6 = maSum / 6;
+
+    // 현재 종가가 MA 아래면 하락 추세
+    if (candles[len - 1].close < ma6) return false;
+
+    // 최근 3봉 고점이 연속 하락이면 하락 추세
+    const h1 = candles[len - 1].high;
+    const h2 = candles[len - 2].high;
+    const h3 = candles[len - 3].high;
+    if (h1 < h2 && h2 < h3) return false;
+
+    return true;
+  } catch {
+    return true; // API 에러 시 통과
+  }
+}
+
 // ── 진입 시그널 체크 (실시간) ─────────────────────
 async function checkEntrySignal(market, price) {
   const coin = market.replace('KRW-', '');
@@ -251,6 +307,20 @@ async function checkEntrySignal(market, price) {
   entryLocks.add(coin);
 
   try {
+    // [FIX #9] 거래량 활성도 체크 — 최근1시간 거래량 >= 직전1시간 × 1.2배
+    const volActive = await checkVolumeActivity(market);
+    if (!volActive) {
+      log(`${coin} OB 터치했으나 거래량 비활성 — 스킵`, 'warn');
+      return;
+    }
+
+    // [FIX #10] 1시간봉 추세 확인 — 하락 추세면 역추세 진입 방지
+    const trendOk = await check1HTrend(market);
+    if (!trendOk) {
+      log(`${coin} OB 터치했으나 1H 하락추세 — 스킵`, 'warn');
+      return;
+    }
+
     // [FIX #2] 실제 업비트 잔고 조회
     const availCash = await getAvailableCash();
     const availSlots = strat.maxPositions - state.positions.length;
