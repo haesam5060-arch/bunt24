@@ -1,0 +1,293 @@
+<!DOCTYPE html>
+<html lang="ko">
+<head>
+<meta charset="UTF-8">
+<meta name="viewport" content="width=device-width, initial-scale=1.0">
+<title>24번트 — 코인 스캘핑 봇</title>
+<style>
+  * { margin: 0; padding: 0; box-sizing: border-box; }
+  body { font-family: -apple-system, 'Pretendard', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; }
+
+  .header { background: linear-gradient(135deg, #161b22 0%, #0d1117 100%); border-bottom: 1px solid #30363d; padding: 16px 24px; display: flex; align-items: center; justify-content: space-between; }
+  .header h1 { font-size: 20px; font-weight: 700; }
+  .header h1 span { color: #f0883e; }
+  .header .status { display: flex; gap: 12px; align-items: center; }
+  .badge { padding: 4px 12px; border-radius: 12px; font-size: 12px; font-weight: 600; }
+  .badge.on { background: #23863620; color: #3fb950; border: 1px solid #23863640; }
+  .badge.off { background: #da363420; color: #f85149; border: 1px solid #da363440; }
+
+  .container { max-width: 1200px; margin: 0 auto; padding: 20px; }
+
+  /* 카드 */
+  .cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(180px, 1fr)); gap: 12px; margin-bottom: 20px; }
+  .card { background: #161b22; border: 1px solid #30363d; border-radius: 12px; padding: 16px; }
+  .card .label { font-size: 11px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; margin-bottom: 4px; }
+  .card .value { font-size: 24px; font-weight: 700; }
+  .card .value.green { color: #3fb950; }
+  .card .value.red { color: #f85149; }
+  .card .sub { font-size: 12px; color: #8b949e; margin-top: 4px; }
+
+  /* 버튼 */
+  .btn-group { display: flex; gap: 8px; margin-bottom: 20px; flex-wrap: wrap; }
+  .btn { padding: 8px 16px; border: 1px solid #30363d; border-radius: 8px; background: #21262d; color: #e6edf3; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.2s; }
+  .btn:hover { background: #30363d; }
+  .btn.primary { background: #238636; border-color: #238636; }
+  .btn.primary:hover { background: #2ea043; }
+  .btn.danger { background: #da3634; border-color: #da3634; }
+  .btn.danger:hover { background: #f85149; }
+  .btn.warning { background: #9e6a03; border-color: #9e6a03; }
+
+  /* 섹션 */
+  .section { background: #161b22; border: 1px solid #30363d; border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+  .section-title { padding: 12px 16px; font-size: 14px; font-weight: 600; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
+  .section-title .count { background: #30363d; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
+
+  /* 테이블 */
+  table { width: 100%; border-collapse: collapse; font-size: 13px; }
+  th { text-align: left; padding: 8px 12px; color: #8b949e; font-weight: 500; border-bottom: 1px solid #30363d; font-size: 11px; text-transform: uppercase; }
+  td { padding: 8px 12px; border-bottom: 1px solid #21262d; }
+  tr:hover { background: #1c2128; }
+  .pnl-pos { color: #3fb950; }
+  .pnl-neg { color: #f85149; }
+
+  /* 로그 */
+  .log-area { max-height: 300px; overflow-y: auto; padding: 8px; }
+  .log-entry { padding: 4px 8px; font-size: 12px; font-family: 'SF Mono', monospace; border-bottom: 1px solid #21262d; }
+  .log-entry .time { color: #8b949e; margin-right: 8px; }
+  .log-entry.error { color: #f85149; }
+  .log-entry.warn { color: #d29922; }
+  .log-entry.trade { color: #3fb950; }
+
+  /* OB 표시 */
+  .ob-zone { display: inline-block; padding: 2px 8px; border-radius: 4px; font-size: 11px; font-weight: 600; }
+  .ob-zone.active { background: #23863620; color: #3fb950; border: 1px solid #23863640; }
+
+  /* 반응형 */
+  @media (max-width: 768px) {
+    .cards { grid-template-columns: repeat(2, 1fr); }
+    .header { flex-direction: column; gap: 8px; }
+    table { font-size: 11px; }
+    th, td { padding: 6px 8px; }
+  }
+</style>
+</head>
+<body>
+
+<div class="header">
+  <h1>🪙 <span>24번트</span> 코인 스캘핑</h1>
+  <div class="status">
+    <span id="tradingBadge" class="badge off">OFF</span>
+    <span id="wsStatus" class="badge off">연결 중...</span>
+  </div>
+</div>
+
+<div class="container">
+
+  <!-- 요약 카드 -->
+  <div class="cards">
+    <div class="card">
+      <div class="label">가용 자금</div>
+      <div class="value" id="cash">-</div>
+    </div>
+    <div class="card">
+      <div class="label">누적 손익</div>
+      <div class="value" id="totalPnl">-</div>
+    </div>
+    <div class="card">
+      <div class="label">승률</div>
+      <div class="value" id="winRate">-</div>
+      <div class="sub" id="winLoss">-</div>
+    </div>
+    <div class="card">
+      <div class="label">총 거래</div>
+      <div class="value" id="totalTrades">-</div>
+    </div>
+    <div class="card">
+      <div class="label">보유 포지션</div>
+      <div class="value" id="posCount">-</div>
+    </div>
+    <div class="card">
+      <div class="label">활성 OB</div>
+      <div class="value" id="obCount">-</div>
+    </div>
+  </div>
+
+  <!-- 버튼 -->
+  <div class="btn-group">
+    <button class="btn primary" onclick="toggleTrading()">자동매매 ON/OFF</button>
+    <button class="btn" onclick="forceScan()">종목 재스캔</button>
+    <button class="btn danger" onclick="sellAll()">전체 매도</button>
+    <button class="btn warning" onclick="resetState()">초기화</button>
+  </div>
+
+  <!-- 보유 포지션 -->
+  <div class="section">
+    <div class="section-title">보유 포지션 <span class="count" id="posCountBadge">0</span></div>
+    <table>
+      <thead><tr>
+        <th>코인</th><th>진입가</th><th>현재가</th><th>수익률</th><th>TP</th><th>SL</th><th>보유시간</th>
+      </tr></thead>
+      <tbody id="positionsTable"></tbody>
+    </table>
+  </div>
+
+  <!-- 감시 코인 + OB -->
+  <div class="section">
+    <div class="section-title">감시 코인 & 오더블록 <span class="count" id="watchCount">0</span></div>
+    <table>
+      <thead><tr>
+        <th>코인</th><th>현재가</th><th>24h 변동</th><th>거래대금</th><th>활성 OB</th>
+      </tr></thead>
+      <tbody id="watchlistTable"></tbody>
+    </table>
+  </div>
+
+  <!-- 일별 수익 -->
+  <div class="section">
+    <div class="section-title">일별 손익</div>
+    <table>
+      <thead><tr><th>날짜</th><th>거래</th><th>손익</th></tr></thead>
+      <tbody id="dailyTable"></tbody>
+    </table>
+  </div>
+
+  <!-- 로그 -->
+  <div class="section">
+    <div class="section-title">실시간 로그</div>
+    <div class="log-area" id="logArea"></div>
+  </div>
+
+</div>
+
+<script>
+let ws;
+let state = {};
+
+function connectWS() {
+  const proto = location.protocol === 'https:' ? 'wss' : 'ws';
+  ws = new WebSocket(`${proto}://${location.host}`);
+
+  ws.onopen = () => {
+    document.getElementById('wsStatus').className = 'badge on';
+    document.getElementById('wsStatus').textContent = '실시간';
+  };
+
+  ws.onmessage = (e) => {
+    const msg = JSON.parse(e.data);
+    if (msg.type === 'state') updateState(msg.data);
+    if (msg.type === 'log') addLog(msg.data);
+    if (msg.type === 'logs') msg.data.forEach(addLog);
+  };
+
+  ws.onclose = () => {
+    document.getElementById('wsStatus').className = 'badge off';
+    document.getElementById('wsStatus').textContent = '재연결...';
+    setTimeout(connectWS, 3000);
+  };
+}
+
+function updateState(s) {
+  state = s;
+
+  // 카드
+  document.getElementById('cash').textContent = s.cash.toLocaleString() + '원';
+  const pnlEl = document.getElementById('totalPnl');
+  pnlEl.textContent = (s.totalPnl > 0 ? '+' : '') + s.totalPnl.toLocaleString() + '원';
+  pnlEl.className = 'value ' + (s.totalPnl >= 0 ? 'green' : 'red');
+
+  document.getElementById('winRate').textContent = s.winRate + '%';
+  document.getElementById('winLoss').textContent = `${s.wins}승 ${s.losses}패`;
+  document.getElementById('totalTrades').textContent = s.totalTrades;
+  document.getElementById('posCount').textContent = s.positions.length;
+
+  const obTotal = Object.values(s.activeOBs || {}).reduce((sum, arr) => sum + arr.length, 0);
+  document.getElementById('obCount').textContent = obTotal;
+
+  // 자동매매 배지
+  const badge = document.getElementById('tradingBadge');
+  badge.className = 'badge ' + (s.autoTrading ? 'on' : 'off');
+  badge.textContent = s.autoTrading ? 'ON' : 'OFF';
+
+  // 포지션 테이블
+  const posTable = document.getElementById('positionsTable');
+  document.getElementById('posCountBadge').textContent = s.positions.length;
+  if (s.positions.length === 0) {
+    posTable.innerHTML = '<tr><td colspan="7" style="text-align:center;color:#8b949e;padding:20px">보유 포지션 없음</td></tr>';
+  } else {
+    posTable.innerHTML = s.positions.map(p => {
+      const holdMin = Math.round((Date.now() - new Date(p.entryTime).getTime()) / 60000);
+      const pnlClass = p.unrealizedPnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+      return `<tr>
+        <td><strong>${p.coin}</strong></td>
+        <td>${p.entryPrice.toLocaleString()}</td>
+        <td>${(p.currentPrice || p.entryPrice).toLocaleString()}</td>
+        <td class="${pnlClass}">${p.unrealizedPnl > 0 ? '+' : ''}${p.unrealizedPnl}%</td>
+        <td class="pnl-pos">${p.tpPrice.toLocaleString()}</td>
+        <td class="pnl-neg">${p.slPrice.toLocaleString()}</td>
+        <td>${holdMin}분</td>
+      </tr>`;
+    }).join('');
+  }
+
+  // 감시 테이블
+  const watchTable = document.getElementById('watchlistTable');
+  document.getElementById('watchCount').textContent = s.watchlist.length;
+  watchTable.innerHTML = (s.watchlist || []).map(w => {
+    const obs = (s.activeOBs || {})[w.coin] || [];
+    const obHtml = obs.length > 0
+      ? obs.map(o => `<span class="ob-zone active">${o.bottom.toLocaleString()}~${o.top.toLocaleString()}</span>`).join(' ')
+      : '<span style="color:#8b949e">없음</span>';
+    const vol = (w.volume24h / 1e8).toFixed(0);
+    return `<tr>
+      <td><strong>${w.coin}</strong></td>
+      <td>${w.price ? w.price.toLocaleString() : '-'}</td>
+      <td>-</td>
+      <td>${vol}억</td>
+      <td>${obHtml}</td>
+    </tr>`;
+  }).join('');
+
+  // 일별 손익
+  const dailyTable = document.getElementById('dailyTable');
+  dailyTable.innerHTML = (s.dailyPnl || []).slice(0, 14).map(d => {
+    const pnlClass = d.pnl >= 0 ? 'pnl-pos' : 'pnl-neg';
+    return `<tr>
+      <td>${d.date}</td>
+      <td>${d.trades}건</td>
+      <td class="${pnlClass}">${d.pnl > 0 ? '+' : ''}${Math.round(d.pnl).toLocaleString()}원</td>
+    </tr>`;
+  }).join('') || '<tr><td colspan="3" style="text-align:center;color:#8b949e;padding:20px">데이터 없음</td></tr>';
+}
+
+function addLog(entry) {
+  const area = document.getElementById('logArea');
+  const div = document.createElement('div');
+  div.className = 'log-entry ' + (entry.level || '');
+  div.innerHTML = `<span class="time">${entry.time}</span>${entry.msg}`;
+  area.prepend(div);
+  while (area.children.length > 200) area.removeChild(area.lastChild);
+}
+
+async function toggleTrading() {
+  await fetch('/api/toggle-trading', { method: 'POST' });
+}
+
+async function forceScan() {
+  await fetch('/api/force-scan', { method: 'POST' });
+}
+
+async function sellAll() {
+  if (!confirm('모든 포지션을 즉시 매도하시겠습니까?')) return;
+  await fetch('/api/sell-all', { method: 'POST' });
+}
+
+async function resetState() {
+  if (!confirm('모든 상태를 초기화하시겠습니까? (거래 기록은 유지됩니다)')) return;
+  await fetch('/api/reset', { method: 'POST' });
+  location.reload();
+}
+
+connectWS();
+</script>
+</body>
+</html>

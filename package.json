@@ -1,0 +1,18 @@
+{
+  "name": "24bunt-crypto-scalper",
+  "version": "1.0.0",
+  "description": "업비트 오더블록 스캘핑 자동매매 봇",
+  "main": "server.js",
+  "scripts": {
+    "start": "node server.js",
+    "dev": "node server.js"
+  },
+  "dependencies": {
+    "express": "^4.18.2",
+    "jsonwebtoken": "^9.0.0",
+    "uuid": "^9.0.0",
+    "ws": "^8.14.0",
+    "node-cron": "^3.0.3",
+    "crypto-js": "^4.2.0"
+  }
+}
