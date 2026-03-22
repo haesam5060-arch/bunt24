@@ -241,11 +241,11 @@ async function checkVolumeActivity(market) {
 }
 
 // ── [FIX #10] 1시간봉 추세 확인 (MTF 크로스체크) ──
-// 1H MA(6) 위 + 1H 고점이 연속 하락이 아닌지 확인
+// 최근 2시간 추세 확인 (백테스트 최적: 승률80.6%, EV+1.703%, MDD-3.17%)
 async function check1HTrend(market) {
   try {
-    const rawCandles = await upbit.getCandles(market, 60, 10); // 1시간봉 10개
-    if (!rawCandles || rawCandles.length < 7) return true;
+    const rawCandles = await upbit.getCandles(market, 60, 4); // 1시간봉 4개 (최근 2시간+여유)
+    if (!rawCandles || rawCandles.length < 2) return true;
 
     const candles = rawCandles
       .map(c => ({ close: c.trade_price, high: c.high_price }))
@@ -253,19 +253,22 @@ async function check1HTrend(market) {
 
     const len = candles.length;
 
-    // 6시간 MA 계산
+    // 2시간 MA 계산
+    const maLen = Math.min(len, 2);
     let maSum = 0;
-    for (let i = len - 6; i < len; i++) maSum += candles[i].close;
-    const ma6 = maSum / 6;
+    for (let i = len - maLen; i < len; i++) maSum += candles[i].close;
+    const ma2 = maSum / maLen;
 
     // 현재 종가가 MA 아래면 하락 추세
-    if (candles[len - 1].close < ma6) return false;
+    if (candles[len - 1].close < ma2) return false;
 
-    // 최근 3봉 고점이 연속 하락이면 하락 추세
-    const h1 = candles[len - 1].high;
-    const h2 = candles[len - 2].high;
-    const h3 = candles[len - 3].high;
-    if (h1 < h2 && h2 < h3) return false;
+    // 최근 고점 연속 하락 체크 (3봉 이상일 때)
+    if (len >= 3) {
+      const h1 = candles[len - 1].high;
+      const h2 = candles[len - 2].high;
+      const h3 = candles[len - 3].high;
+      if (h1 < h2 && h2 < h3) return false;
+    }
 
     return true;
   } catch {
