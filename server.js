@@ -127,6 +127,7 @@ function connectUpbitWebSocket(markets) {
   });
 
   upbitWs.on('close', () => {
+    if (!config.autoTrading) return; // OFF면 재연결 안 함
     log('업비트 WebSocket 연결 끊김 — 5초 후 재연결', 'warn');
     // [FIX #6] 저장된 마켓 리스트로 재연결
     setTimeout(() => connectUpbitWebSocket(currentMarkets), 5000);
@@ -307,12 +308,8 @@ async function checkEntrySignal(market, price) {
   entryLocks.add(coin);
 
   try {
-    // [FIX #9] 거래량 활성도 체크 — 최근1시간 거래량 >= 직전1시간 × 1.2배
-    const volActive = await checkVolumeActivity(market);
-    if (!volActive) {
-      log(`${coin} OB 터치했으나 거래량 비활성 — 스킵`, 'warn');
-      return;
-    }
+    // [FIX #9] 거래량 활성도 체크 — 백테스트 결과 필터 제거가 더 높은 수익 (EV +1.696% vs +1.612%)
+    // 거래량 필터가 좋은 신호까지 걸러내고 있었음 → 제거
 
     // [FIX #10] 1시간봉 추세 확인 — 하락 추세면 역추세 진입 방지
     const trendOk = await check1HTrend(market);
@@ -707,6 +704,20 @@ app.post('/api/toggle-trading', (req, res) => {
   config.autoTrading = !config.autoTrading;
   fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
   log(`자동매매 ${config.autoTrading ? 'ON 🟢' : 'OFF 🔴'}`, config.autoTrading ? 'trade' : 'warn');
+
+  if (config.autoTrading) {
+    // ON → WebSocket 재연결 + 스캔 시작
+    if (currentMarkets && currentMarkets.length > 0) {
+      connectUpbitWebSocket(currentMarkets);
+    } else {
+      scanTopCoins();
+    }
+  } else {
+    // OFF → WebSocket 끊기
+    if (upbitWs) { try { upbitWs.close(); } catch {} upbitWs = null; }
+    log('WebSocket 연결 해제 — 대기 모드', 'warn');
+  }
+
   broadcastToClients({ type: 'state', data: getPublicState() });
   res.json({ autoTrading: config.autoTrading });
 });
@@ -741,14 +752,18 @@ const server = app.listen(PORT, async () => {
   // 업비트 잔고 동기화
   await syncPositionsWithUpbit();
 
-  // 초기 스캔
-  await scanTopCoins();
+  if (config.autoTrading) {
+    // 초기 스캔
+    await scanTopCoins();
+  } else {
+    log('자동매매 OFF — WebSocket 연결 대기 중. ON하면 시작합니다.', 'warn');
+  }
 
-  // 15분마다 종목 재스캔
-  setInterval(scanTopCoins, 15 * 60 * 1000);
+  // 15분마다 종목 재스캔 (autoTrading ON일 때만)
+  setInterval(() => { if (config.autoTrading) scanTopCoins(); }, 15 * 60 * 1000);
 
-  // 5분마다 OB 업데이트
-  setInterval(updateAllOBs, 5 * 60 * 1000);
+  // 5분마다 OB 업데이트 (autoTrading ON일 때만)
+  setInterval(() => { if (config.autoTrading) updateAllOBs(); }, 5 * 60 * 1000);
 });
 
 // WebSocket 서버
