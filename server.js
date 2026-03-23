@@ -329,7 +329,7 @@ async function checkEntrySignal(market, price) {
     // [FIX #2] 실제 업비트 잔고 조회
     const availCash = await getAvailableCash();
     const availSlots = strat.maxPositions - state.positions.length;
-    const allocAmount = Math.floor(availCash / availSlots);
+    const allocAmount = Math.floor(availCash * 0.995 / availSlots); // 0.5% 여유 (수수료+버퍼)
 
     if (allocAmount < strat.minOrderAmount) {
       log(`${coin} 자금 부족: ${availCash.toLocaleString()}원 (필요: ${strat.minOrderAmount.toLocaleString()}원)`, 'warn');
@@ -507,8 +507,9 @@ async function checkExitSignal(market, price) {
     // 보유 수량 조회 후 시장가 매도
     const holdings = await upbit.getHoldings(config.upbit.accessKey, config.upbit.secretKey);
     const holding = holdings.find(h => h.currency === coin);
+    const sellVolume = holding ? (holding.balance || holding.locked || 0) : 0;
 
-    if (!holding || holding.balance <= 0) {
+    if (!holding || sellVolume <= 0) {
       log(`${coin} 보유 수량 없음 — 포지션 정리`, 'warn');
       state.positions = state.positions.filter(p => p.coin !== coin);
       saveState(state);
@@ -517,7 +518,7 @@ async function checkExitSignal(market, price) {
 
     const result = await upbit.sellMarket(
       config.upbit.accessKey, config.upbit.secretKey,
-      market, holding.balance
+      market, sellVolume
     );
 
     await sleep(1500);

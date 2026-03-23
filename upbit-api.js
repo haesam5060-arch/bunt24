@@ -94,11 +94,12 @@ async function getBalance(accessKey, secretKey) {
 async function getHoldings(accessKey, secretKey) {
   const accounts = await getAccounts(accessKey, secretKey);
   return accounts
-    .filter(a => a.currency !== 'KRW' && parseFloat(a.balance) > 0)
+    .filter(a => a.currency !== 'KRW' && (parseFloat(a.balance) > 0 || parseFloat(a.locked) > 0))
     .map(a => ({
       currency: a.currency,
       market: `KRW-${a.currency}`,
       balance: parseFloat(a.balance),
+      locked: parseFloat(a.locked),
       avgBuyPrice: parseFloat(a.avg_buy_price),
     }));
 }
