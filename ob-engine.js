@@ -122,6 +122,7 @@ function calcEntryExitPrices(ob, entryPrice, config) {
 
 // ── 5분봉 데이터 정규화 (업비트 API 형식 → 내부 형식) ──
 function normalizeCandles(rawCandles) {
+  if (!Array.isArray(rawCandles)) return [];
   return rawCandles
     .map(c => ({
       time: c.candle_date_time_kst,

@@ -110,6 +110,11 @@ function connectUpbitWebSocket(markets) {
     upbitWs.send(msg);
   });
 
+  // 업비트 WebSocket ping → pong 응답 (연결 유지)
+  upbitWs.on('ping', (data) => {
+    try { upbitWs.pong(data); } catch {}
+  });
+
   upbitWs.on('message', (data) => {
     try {
       const parsed = JSON.parse(data.toString());
@@ -222,7 +227,7 @@ async function updateAllOBs() {
 async function checkVolumeActivity(market) {
   try {
     const rawCandles = await upbit.getCandles(market, 5, 24); // 최근 2시간 (24 × 5분)
-    if (!rawCandles || rawCandles.length < 24) return true; // 데이터 부족 시 통과
+    if (!Array.isArray(rawCandles) || rawCandles.length < 24) return true; // 데이터 부족 시 통과
 
     // 최근 12봉(1시간) 거래량
     let recentVol = 0;
@@ -245,7 +250,7 @@ async function checkVolumeActivity(market) {
 async function check1HTrend(market) {
   try {
     const rawCandles = await upbit.getCandles(market, 60, 4); // 1시간봉 4개 (최근 2시간+여유)
-    if (!rawCandles || rawCandles.length < 2) return true;
+    if (!Array.isArray(rawCandles) || rawCandles.length < 2) return true;
 
     const candles = rawCandles
       .map(c => ({ close: c.trade_price, high: c.high_price }))
