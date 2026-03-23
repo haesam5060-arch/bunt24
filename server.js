@@ -58,6 +58,7 @@ const exitLocks = new Set();   // 매도 중인 코인
 
 // ── [FIX #6] WebSocket 재연결용 마켓 리스트 저장 ──
 let currentMarkets = [];
+let lastCashWarnTime = 0;
 
 // ── 로깅 ──────────────────────────────────────────
 const logs = [];
@@ -108,6 +109,8 @@ function connectUpbitWebSocket(markets) {
 
   upbitWs = new WebSocket('wss://api.upbit.com/websocket/v1');
 
+  let pingInterval = null;
+
   upbitWs.on('open', () => {
     log(`업비트 WebSocket 연결 (${markets.length}개 코인 실시간 감시)`);
     const msg = JSON.stringify([
@@ -115,6 +118,12 @@ function connectUpbitWebSocket(markets) {
       { type: 'ticker', codes: markets, isOnlyRealtime: true },
     ]);
     upbitWs.send(msg);
+
+    // 30초마다 PING 전송 (연결 유지)
+    if (pingInterval) clearInterval(pingInterval);
+    pingInterval = setInterval(() => {
+      try { if (upbitWs.readyState === WebSocket.OPEN) upbitWs.ping(); } catch {}
+    }, 30000);
   });
 
   // 업비트 WebSocket ping → pong 응답 (연결 유지)
@@ -139,6 +148,7 @@ function connectUpbitWebSocket(markets) {
   });
 
   upbitWs.on('close', () => {
+    if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
     if (!config.autoTrading) return; // OFF면 재연결 안 함
     log('업비트 WebSocket 연결 끊김 — 5초 후 재연결', 'warn');
     // [FIX #6] 저장된 마켓 리스트로 재연결
@@ -344,7 +354,12 @@ async function checkEntrySignal(market, price) {
     const allocAmount = Math.floor(availCash * 0.995 / availSlots); // 0.5% 여유 (수수료+버퍼)
 
     if (allocAmount < strat.minOrderAmount) {
-      log(`${coin} 자금 부족: ${availCash.toLocaleString()}원 (필요: ${strat.minOrderAmount.toLocaleString()}원)`, 'warn');
+      // 자금 부족 로그 스팸 방지 — 5분에 1번만
+      const now = Date.now();
+      if (!lastCashWarnTime || now - lastCashWarnTime > 5 * 60 * 1000) {
+        log(`자금 부족: ${Math.round(availCash).toLocaleString()}원 (필요: ${strat.minOrderAmount.toLocaleString()}원)`, 'warn');
+        lastCashWarnTime = now;
+      }
       return;
     }
 
@@ -435,10 +450,10 @@ async function checkEntrySignal(market, price) {
     appendTradeLog({
       action: 'BUY',
       coin, market,
-      price: actualEntryPrice,
+      price: Math.round(actualEntryPrice),
       amount: allocAmount,
-      tpPrice: finalPrices.tpPrice,
-      slPrice: finalPrices.slPrice,
+      tpPrice: Math.round(finalPrices.tpPrice),
+      slPrice: Math.round(finalPrices.slPrice),
     });
 
     broadcastToClients({ type: 'state', data: getPublicState() });
@@ -462,51 +477,46 @@ async function checkExitSignal(market, price) {
   const pos = state.positions.find(p => p.coin === coin);
   if (!pos) return;
 
-  // [FIX #1] 동시 실행 방지
+  // [FIX #1] 동시 실행 방지 — 모든 async 작업 전에 락
   if (exitLocks.has(coin)) return;
-
-  // ── TP 지정가 주문 체결 확인 ──
-  if (pos.tpOrderId) {
-    try {
-      const orderInfo = await upbit.getOrder(config.upbit.accessKey, config.upbit.secretKey, pos.tpOrderId);
-      if (orderInfo.state === 'done') {
-        // TP 지정가 체결 완료
-        exitLocks.add(coin);
-        let actualExitPrice = pos.tpPrice;
-        if (orderInfo.trades && orderInfo.trades.length > 0) {
-          let totalFunds = 0, totalVol = 0;
-          for (const t of orderInfo.trades) {
-            totalFunds += parseFloat(t.funds);
-            totalVol += parseFloat(t.volume);
-          }
-          if (totalVol > 0) actualExitPrice = totalFunds / totalVol;
-        }
-        recordExit(pos, 'TP', actualExitPrice);
-        exitLocks.delete(coin);
-        return;
-      }
-    } catch (e) {
-      log(`${coin} TP 주문 조회 실패: ${e.message}`, 'warn');
-    }
-  }
-
-  // ── SL / TIMEOUT 체크 ──
-  let exitReason = null;
-
-  if (price <= pos.slPrice) {
-    exitReason = 'SL';
-  } else {
-    const holdMs = Date.now() - new Date(pos.entryTime).getTime();
-    const maxMs = (config.strategy.maxHoldCandles || 60) * 5 * 60 * 1000;
-    if (holdMs >= maxMs) exitReason = 'TIMEOUT';
-  }
-
-  if (!exitReason) return;
-
-  // 락 설정
   exitLocks.add(coin);
 
   try {
+    // ── TP 지정가 주문 체결 확인 ──
+    if (pos.tpOrderId) {
+      try {
+        const orderInfo = await upbit.getOrder(config.upbit.accessKey, config.upbit.secretKey, pos.tpOrderId);
+        if (orderInfo.state === 'done') {
+          let actualExitPrice = pos.tpPrice;
+          if (orderInfo.trades && orderInfo.trades.length > 0) {
+            let totalFunds = 0, totalVol = 0;
+            for (const t of orderInfo.trades) {
+              totalFunds += parseFloat(t.funds);
+              totalVol += parseFloat(t.volume);
+            }
+            if (totalVol > 0) actualExitPrice = totalFunds / totalVol;
+          }
+          recordExit(pos, 'TP', actualExitPrice);
+          return;
+        }
+      } catch (e) {
+        log(`${coin} TP 주문 조회 실패: ${e.message}`, 'warn');
+      }
+    }
+
+    // ── SL / TIMEOUT 체크 ──
+    let exitReason = null;
+
+    if (price <= pos.slPrice) {
+      exitReason = 'SL';
+    } else {
+      const holdMs = Date.now() - new Date(pos.entryTime).getTime();
+      const maxMs = (config.strategy.maxHoldCandles || 60) * 5 * 60 * 1000;
+      if (holdMs >= maxMs) exitReason = 'TIMEOUT';
+    }
+
+    if (!exitReason) return;
+
     // TP 지정가 주문 취소
     if (pos.tpOrderId) {
       try {
@@ -514,7 +524,6 @@ async function checkExitSignal(market, price) {
         log(`${coin} TP 지정가 주문 취소 완료`, 'info');
         await sleep(500);
       } catch (e) {
-        // 이미 체결/취소된 경우 무시
         log(`${coin} TP 주문 취소 참고: ${e.message}`, 'warn');
       }
     }
@@ -595,7 +604,7 @@ function recordExit(pos, exitReason, actualExitPrice) {
   const tradeRecord = {
     action: 'SELL',
     coin: pos.coin, market: pos.market, reason: exitReason,
-    entryPrice: pos.entryPrice, exitPrice: actualExitPrice,
+    entryPrice: Math.round(pos.entryPrice), exitPrice: Math.round(actualExitPrice),
     amount: pos.amount, pnl: Math.round(pnl),
     pnlPct: +pnlPct.toFixed(2),
     holdMinutes,
@@ -653,7 +662,7 @@ async function sellAllPositions() {
       const holdMinutes = Math.round((Date.now() - new Date(pos.entryTime).getTime()) / 60000);
       appendTradeLog({
         action: 'SELL', coin: pos.coin, market: pos.market, reason: 'MANUAL',
-        entryPrice: pos.entryPrice, exitPrice: price,
+        entryPrice: Math.round(pos.entryPrice), exitPrice: Math.round(price),
         amount: pos.amount, pnl: Math.round(pnl), pnlPct: +pnlPct.toFixed(2),
         holdMinutes,
       });

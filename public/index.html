@@ -237,6 +237,9 @@
 <script>
 let ws, state = {};
 
+// 가격/금액 포맷: 소수점 제거하고 천단위 콤마
+function fmt(n) { return Math.round(n).toLocaleString(); }
+
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
   ws = new WebSocket(`${proto}://${location.host}`);
@@ -287,11 +290,11 @@ function updatePositionCards() {
     const barCls = pct > 50 ? 'tp' : 'sl';
     return `<div class="pos-card ${cls}">
       <div class="pos-coin">${p.coin}</div>
-      <div class="pos-pnl ${pnlCls}">${pnlPct > 0 ? '+' : ''}${pnlPct}% <span style="font-size:14px">(${pnlAmt > 0 ? '+' : ''}${pnlAmt.toLocaleString()}원)</span></div>
+      <div class="pos-pnl ${pnlCls}">${pnlPct > 0 ? '+' : ''}${pnlPct}% <span style="font-size:14px">(${pnlAmt > 0 ? '+' : ''}${fmt(pnlAmt)}원)</span></div>
       <div class="pos-detail">
-        진입 ${p.entryPrice.toLocaleString()} → 현재 ${(p.currentPrice || p.entryPrice).toLocaleString()}<br>
-        TP <span class="green">${p.tpPrice.toLocaleString()}</span> | SL <span class="red">${p.slPrice.toLocaleString()}</span><br>
-        투자 ${p.amount.toLocaleString()}원 | ${holdMin}분 보유
+        진입 ${fmt(p.entryPrice)} → 현재 ${fmt(p.currentPrice || p.entryPrice)}<br>
+        TP <span class="green">${fmt(p.tpPrice)}</span> | SL <span class="red">${fmt(p.slPrice)}</span><br>
+        투자 ${fmt(p.amount)}원 | ${holdMin}분 보유
       </div>
       <div class="pos-bar"><div class="pos-bar-fill ${barCls}" style="width:${pct}%"></div></div>
     </div>`;
@@ -313,13 +316,13 @@ function updateState(s) {
   const todayData = (s.dailyPnl || []).find(d => d.date === today);
   const todayPnlVal = todayData ? todayData.pnl : 0;
   const todayEl = document.getElementById('todayPnl');
-  todayEl.textContent = (todayPnlVal > 0 ? '+' : '') + Math.round(todayPnlVal).toLocaleString() + '원';
+  todayEl.textContent = (todayPnlVal > 0 ? '+' : '') + fmt(todayPnlVal) + '원';
   todayEl.className = 'hero-value ' + (todayPnlVal >= 0 ? 'green' : 'red');
   document.getElementById('todayTrades').textContent = (todayData ? todayData.trades : 0) + '건 거래';
 
   // 누적 수익
   const tpEl = document.getElementById('totalPnl');
-  tpEl.textContent = (s.totalPnl > 0 ? '+' : '') + s.totalPnl.toLocaleString() + '원';
+  tpEl.textContent = (s.totalPnl > 0 ? '+' : '') + fmt(s.totalPnl) + '원';
   tpEl.className = 'hero-value ' + (s.totalPnl >= 0 ? 'green' : 'red');
   const initCap = 100000;
   const retPct = initCap > 0 ? (s.totalPnl / initCap * 100).toFixed(2) : 0;
@@ -355,11 +358,11 @@ function updateState(s) {
 
       return `<div class="pos-card ${cls}">
         <div class="pos-coin">${p.coin}</div>
-        <div class="pos-pnl ${pnlCls}">${pnlPct > 0 ? '+' : ''}${pnlPct}% <span style="font-size:14px">(${pnlAmt > 0 ? '+' : ''}${pnlAmt.toLocaleString()}원)</span></div>
+        <div class="pos-pnl ${pnlCls}">${pnlPct > 0 ? '+' : ''}${pnlPct}% <span style="font-size:14px">(${pnlAmt > 0 ? '+' : ''}${fmt(pnlAmt)}원)</span></div>
         <div class="pos-detail">
-          진입 ${p.entryPrice.toLocaleString()} → 현재 ${(p.currentPrice || p.entryPrice).toLocaleString()}<br>
-          TP <span class="green">${p.tpPrice.toLocaleString()}</span> | SL <span class="red">${p.slPrice.toLocaleString()}</span><br>
-          투자 ${p.amount.toLocaleString()}원 | ${holdMin}분 보유
+          진입 ${fmt(p.entryPrice)} → 현재 ${fmt(p.currentPrice || p.entryPrice)}<br>
+          TP <span class="green">${fmt(p.tpPrice)}</span> | SL <span class="red">${fmt(p.slPrice)}</span><br>
+          투자 ${fmt(p.amount)}원 | ${holdMin}분 보유
         </div>
         <div class="pos-bar"><div class="pos-bar-fill ${barCls}" style="width:${pct}%"></div></div>
       </div>`;
@@ -381,7 +384,7 @@ function updateState(s) {
         <span class="date">${d.date.slice(5)}</span>
         <span class="trades">${d.trades}건</span>
         <div class="bar-wrap"><div class="bar ${cls}" style="width:${Math.max(pct, 3)}%"></div></div>
-        <span class="pnl-text ${pnlCls}">${d.pnl > 0 ? '+' : ''}${Math.round(d.pnl).toLocaleString()}원</span>
+        <span class="pnl-text ${pnlCls}">${d.pnl > 0 ? '+' : ''}${fmt(d.pnl)}원</span>
       </div>`;
     }).join('');
   }
@@ -392,13 +395,13 @@ function updateState(s) {
   wt.innerHTML = (s.watchlist || []).map(w => {
     const obs = (s.activeOBs || {})[w.coin] || [];
     const obHtml = obs.length > 0
-      ? obs.slice(0, 5).map(o => `<span class="ob-badge">${o.bottom.toLocaleString()}~${o.top.toLocaleString()}</span>`).join(' ') + (obs.length > 5 ? ` <span style="color:#8b949e;font-size:10px">+${obs.length-5}</span>` : '')
+      ? obs.slice(0, 5).map(o => `<span class="ob-badge">${fmt(o.bottom)}~${fmt(o.top)}</span>`).join(' ') + (obs.length > 5 ? ` <span style="color:#8b949e;font-size:10px">+${obs.length-5}</span>` : '')
       : '<span style="color:#484f58">-</span>';
     const vol = (w.volume24h / 1e8).toFixed(0);
     const cp = latestPrices[w.market];
     return `<tr>
       <td><strong>${w.coin}</strong></td>
-      <td>${cp ? cp.toLocaleString() : w.price.toLocaleString()}</td>
+      <td>${fmt(cp || w.price)}</td>
       <td>${vol}억</td>
       <td>${obHtml}</td>
     </tr>`;
@@ -421,8 +424,8 @@ async function loadBalance() {
     const res = await fetch('/api/balance');
     const b = await res.json();
     if (b.error) return;
-    document.getElementById('realBalance').textContent = b.krw.toLocaleString() + '원';
-    document.getElementById('realTotal').textContent = '총 자산 ' + b.totalAsset.toLocaleString() + '원';
+    document.getElementById('realBalance').textContent = fmt(b.krw) + '원';
+    document.getElementById('realTotal').textContent = '총 자산 ' + fmt(b.totalAsset) + '원';
     const ht = document.getElementById('holdingsTable');
     if (b.holdings.length === 0) {
       ht.innerHTML = '<tr><td colspan="4" class="empty-msg">보유 코인 없음</td></tr>';
@@ -432,7 +435,7 @@ async function loadBalance() {
         return `<tr>
           <td><strong>${h.currency}</strong></td>
           <td>${h.balance < 1 ? h.balance.toFixed(6) : h.balance.toFixed(2)}</td>
-          <td>${h.evalAmount.toLocaleString()}원</td>
+          <td>${fmt(h.evalAmount)}원</td>
           <td class="${cls}">${h.pnlPct > 0 ? '+' : ''}${h.pnlPct}%</td>
         </tr>`;
       }).join('');
@@ -468,14 +471,14 @@ async function loadTrades() {
       const actionCls = isBuy ? 'green' : (t.pnl > 0 ? 'green' : 'red');
       const actionText = isBuy ? '매수' : '매도';
       const price = isBuy ? t.price : t.exitPrice;
-      const pnlHtml = isBuy ? '-' : `<span class="${t.pnl > 0 ? 'green' : 'red'}">${t.pnl > 0 ? '+' : ''}${t.pnl.toLocaleString()}원 (${t.pnlPct > 0 ? '+' : ''}${t.pnlPct}%)</span>`;
+      const pnlHtml = isBuy ? '-' : `<span class="${t.pnl > 0 ? 'green' : 'red'}">${t.pnl > 0 ? '+' : ''}${fmt(t.pnl)}원 (${t.pnlPct > 0 ? '+' : ''}${t.pnlPct}%)</span>`;
       const reason = t.reason ? ({ TP: '익절', SL: '손절', TIMEOUT: '시간초과', MANUAL: '수동' }[t.reason] || t.reason) : '-';
       return `<tr>
         <td style="white-space:nowrap">${time}</td>
         <td><strong>${t.coin}</strong></td>
         <td class="${actionCls}" style="font-weight:600">${actionText}</td>
-        <td>${price ? price.toLocaleString() : '-'}원</td>
-        <td>${t.amount ? t.amount.toLocaleString() : '-'}원</td>
+        <td>${price ? fmt(price) : '-'}원</td>
+        <td>${t.amount ? fmt(t.amount) : '-'}원</td>
         <td>${pnlHtml}</td>
         <td>${reason}</td>
       </tr>`;
