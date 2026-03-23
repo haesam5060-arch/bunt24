@@ -247,6 +247,7 @@ function connectWS() {
   ws.onmessage = (e) => {
     const msg = JSON.parse(e.data);
     if (msg.type === 'state') updateState(msg.data);
+    if (msg.type === 'prices') updatePrices(msg.data);
     if (msg.type === 'log') addLog(msg.data);
     if (msg.type === 'logs') msg.data.forEach(addLog);
   };
@@ -255,6 +256,46 @@ function connectWS() {
     document.getElementById('wsStatus').textContent = '재연결...';
     setTimeout(connectWS, 3000);
   };
+}
+
+function updatePrices(prices) {
+  if (!state || !state.positions || state.positions.length === 0) return;
+  let changed = false;
+  state.positions.forEach(p => {
+    const price = prices[p.market];
+    if (price && price !== p.currentPrice) {
+      p.currentPrice = price;
+      p.unrealizedPnl = +((price - p.entryPrice) / p.entryPrice * 100).toFixed(2);
+      changed = true;
+    }
+  });
+  if (changed) updatePositionCards();
+}
+
+function updatePositionCards() {
+  const posArea = document.getElementById('posArea');
+  if (!state.positions || state.positions.length === 0) return;
+  posArea.innerHTML = state.positions.map(p => {
+    const holdMin = Math.round((Date.now() - new Date(p.entryTime).getTime()) / 60000);
+    const pnlPct = p.unrealizedPnl || 0;
+    const pnlAmt = Math.round(p.amount * pnlPct / 100);
+    const cls = pnlPct >= 0 ? 'profit' : 'loss';
+    const pnlCls = pnlPct >= 0 ? 'green' : 'red';
+    const range = p.tpPrice - p.slPrice;
+    const current = (p.currentPrice || p.entryPrice) - p.slPrice;
+    const pct = range > 0 ? Math.max(0, Math.min(100, current / range * 100)) : 50;
+    const barCls = pct > 50 ? 'tp' : 'sl';
+    return `<div class="pos-card ${cls}">
+      <div class="pos-coin">${p.coin}</div>
+      <div class="pos-pnl ${pnlCls}">${pnlPct > 0 ? '+' : ''}${pnlPct}% <span style="font-size:14px">(${pnlAmt > 0 ? '+' : ''}${pnlAmt.toLocaleString()}원)</span></div>
+      <div class="pos-detail">
+        진입 ${p.entryPrice.toLocaleString()} → 현재 ${(p.currentPrice || p.entryPrice).toLocaleString()}<br>
+        TP <span class="green">${p.tpPrice.toLocaleString()}</span> | SL <span class="red">${p.slPrice.toLocaleString()}</span><br>
+        투자 ${p.amount.toLocaleString()}원 | ${holdMin}분 보유
+      </div>
+      <div class="pos-bar"><div class="pos-bar-fill ${barCls}" style="width:${pct}%"></div></div>
+    </div>`;
+  }).join('');
 }
 
 function updateState(s) {

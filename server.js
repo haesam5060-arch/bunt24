@@ -88,6 +88,13 @@ function broadcastToClients(data) {
   wsClients.forEach(ws => { try { ws.send(msg); } catch {} });
 }
 
+// 3초마다 포지션 보유 중이면 가격 업데이트 브로드캐스트
+setInterval(() => {
+  if (state.positions.length > 0 && wsClients.length > 0) {
+    broadcastToClients({ type: 'prices', data: latestPrices });
+  }
+}, 3000);
+
 // ── 업비트 WebSocket (실시간 체결가) ──────────────
 let upbitWs = null;
 const latestPrices = {};
@@ -344,9 +351,10 @@ async function checkEntrySignal(market, price) {
     // 진입/익절/손절 가격
     const prices = ob.calcEntryExitPrices(touchedOB, price, strat);
 
-    // [FIX #8] 최소 수익률 필터 — TP가 진입가 대비 0.8% 미만이면 스킵
+    // [FIX #8] 최소 수익률 필터 — TP가 진입가 대비 minTpPct% 미만이면 스킵
     const expectedPct = (prices.tpPrice - price) / price * 100;
-    if (expectedPct < 0.8) {
+    const minTpPct = strat.minTpPct || 2.0;
+    if (expectedPct < minTpPct) {
       log(`${coin} OB 터치했으나 TP 너무 가까움 (${expectedPct.toFixed(2)}%) — 스킵`, 'warn');
       return;
     }
@@ -477,7 +485,9 @@ async function checkExitSignal(market, price) {
         exitLocks.delete(coin);
         return;
       }
-    } catch {}
+    } catch (e) {
+      log(`${coin} TP 주문 조회 실패: ${e.message}`, 'warn');
+    }
   }
 
   // ── SL / TIMEOUT 체크 ──
@@ -640,10 +650,12 @@ async function sellAllPositions() {
       if (pnl > 0) state.wins++; else state.losses++;
       saveState(state);
 
+      const holdMinutes = Math.round((Date.now() - new Date(pos.entryTime).getTime()) / 60000);
       appendTradeLog({
         action: 'SELL', coin: pos.coin, market: pos.market, reason: 'MANUAL',
         entryPrice: pos.entryPrice, exitPrice: price,
         amount: pos.amount, pnl: Math.round(pnl), pnlPct: +pnlPct.toFixed(2),
+        holdMinutes,
       });
 
       await sleep(300);
