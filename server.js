@@ -172,7 +172,12 @@ async function scanTopCoins() {
     const markets = topCoins.map(t => t.market);
     log(`코인 스캔 완료: ${markets.map(m => m.replace('KRW-', '')).join(', ')}`);
 
-    connectUpbitWebSocket(markets);
+    // watchlist 변경 시에만 WebSocket 재연결
+    const oldMarkets = (currentMarkets || []).sort().join(',');
+    const newMarkets = markets.sort().join(',');
+    if (oldMarkets !== newMarkets || !upbitWs || upbitWs.readyState !== WebSocket.OPEN) {
+      connectUpbitWebSocket(markets);
+    }
     await updateAllOBs();
 
     state.lastScan = new Date().toISOString();
