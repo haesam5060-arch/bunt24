@@ -354,21 +354,24 @@ async function checkEntrySignal(market, price) {
       market, allocAmount
     );
 
-    // [FIX #5] 실제 체결가 확인 (1초 대기 후 주문 조회)
+    // [FIX #5] 실제 체결가/수량 확인 (1초 대기 후 주문 조회)
     await sleep(1500);
     let actualEntryPrice = price;
+    let actualVolume = 0;
     try {
       const orderInfo = await upbit.getOrder(config.upbit.accessKey, config.upbit.secretKey, result.uuid);
       if (orderInfo.trades && orderInfo.trades.length > 0) {
-        // 가중평균 체결가 계산
         let totalFunds = 0, totalVol = 0;
         for (const t of orderInfo.trades) {
           totalFunds += parseFloat(t.funds);
           totalVol += parseFloat(t.volume);
         }
-        if (totalVol > 0) actualEntryPrice = totalFunds / totalVol;
+        if (totalVol > 0) {
+          actualEntryPrice = totalFunds / totalVol;
+          actualVolume = totalVol;
+        }
       }
-      log(`📊 ${coin} 실제 체결가: ${actualEntryPrice.toLocaleString()}원 (WebSocket: ${price.toLocaleString()}원)`, 'info');
+      log(`📊 ${coin} 실제 체결가: ${actualEntryPrice.toLocaleString()}원 × ${actualVolume}개 (WebSocket: ${price.toLocaleString()}원)`, 'info');
     } catch (e) {
       log(`${coin} 체결가 조회 실패 — WebSocket 가격 사용: ${price.toLocaleString()}원`, 'warn');
     }
@@ -378,6 +381,21 @@ async function checkEntrySignal(market, price) {
     // 실제 체결가 기준으로 TP/SL 재계산
     const finalPrices = ob.calcEntryExitPrices(touchedOB, actualEntryPrice, strat);
 
+    // TP 지정가 매도 예약 (슬리피지 방지)
+    let tpOrderId = null;
+    if (actualVolume > 0) {
+      try {
+        const tpOrder = await upbit.sellLimit(
+          config.upbit.accessKey, config.upbit.secretKey,
+          market, actualVolume, finalPrices.tpPrice
+        );
+        tpOrderId = tpOrder.uuid;
+        log(`📌 ${coin} TP 지정가 매도 예약: ${finalPrices.tpPrice.toLocaleString()}원 × ${actualVolume}개`, 'info');
+      } catch (e) {
+        log(`${coin} TP 지정가 예약 실패: ${e.message} — WebSocket 감시로 폴백`, 'warn');
+      }
+    }
+
     const position = {
       coin,
       market,
@@ -385,10 +403,12 @@ async function checkEntrySignal(market, price) {
       tpPrice: finalPrices.tpPrice,
       slPrice: finalPrices.slPrice,
       amount: allocAmount,
+      volume: actualVolume,
       orderId: result.uuid,
+      tpOrderId,              // TP 지정가 매도 주문 ID
       entryTime: new Date().toISOString(),
       obImpulse: touchedOB.impulsePct,
-      sellRetries: 0,         // [FIX #3] 매도 재시도 횟수
+      sellRetries: 0,
     };
 
     state.positions.push(position);
@@ -418,6 +438,8 @@ async function checkEntrySignal(market, price) {
 }
 
 // ── 청산 시그널 체크 (실시간) ─────────────────────
+// TP: 지정가 주문 체결 확인 (슬리피지 0)
+// SL/TIMEOUT: 지정가 취소 → 시장가 매도 (빠른 탈출)
 async function checkExitSignal(market, price) {
   const coin = market.replace('KRW-', '');
 
@@ -430,18 +452,35 @@ async function checkExitSignal(market, price) {
   // [FIX #1] 동시 실행 방지
   if (exitLocks.has(coin)) return;
 
+  // ── TP 지정가 주문 체결 확인 ──
+  if (pos.tpOrderId) {
+    try {
+      const orderInfo = await upbit.getOrder(config.upbit.accessKey, config.upbit.secretKey, pos.tpOrderId);
+      if (orderInfo.state === 'done') {
+        // TP 지정가 체결 완료
+        exitLocks.add(coin);
+        let actualExitPrice = pos.tpPrice;
+        if (orderInfo.trades && orderInfo.trades.length > 0) {
+          let totalFunds = 0, totalVol = 0;
+          for (const t of orderInfo.trades) {
+            totalFunds += parseFloat(t.funds);
+            totalVol += parseFloat(t.volume);
+          }
+          if (totalVol > 0) actualExitPrice = totalFunds / totalVol;
+        }
+        recordExit(pos, 'TP', actualExitPrice);
+        exitLocks.delete(coin);
+        return;
+      }
+    } catch {}
+  }
+
+  // ── SL / TIMEOUT 체크 ──
   let exitReason = null;
 
-  // 손절
   if (price <= pos.slPrice) {
     exitReason = 'SL';
-  }
-  // 익절
-  else if (price >= pos.tpPrice) {
-    exitReason = 'TP';
-  }
-  // 시간 초과 (maxHoldCandles × 5분)
-  else {
+  } else {
     const holdMs = Date.now() - new Date(pos.entryTime).getTime();
     const maxMs = (config.strategy.maxHoldCandles || 60) * 5 * 60 * 1000;
     if (holdMs >= maxMs) exitReason = 'TIMEOUT';
@@ -453,7 +492,19 @@ async function checkExitSignal(market, price) {
   exitLocks.add(coin);
 
   try {
-    // 보유 수량 조회 후 매도
+    // TP 지정가 주문 취소
+    if (pos.tpOrderId) {
+      try {
+        await upbit.cancelOrder(config.upbit.accessKey, config.upbit.secretKey, pos.tpOrderId);
+        log(`${coin} TP 지정가 주문 취소 완료`, 'info');
+        await sleep(500);
+      } catch (e) {
+        // 이미 체결/취소된 경우 무시
+        log(`${coin} TP 주문 취소 참고: ${e.message}`, 'warn');
+      }
+    }
+
+    // 보유 수량 조회 후 시장가 매도
     const holdings = await upbit.getHoldings(config.upbit.accessKey, config.upbit.secretKey);
     const holding = holdings.find(h => h.currency === coin);
 
@@ -469,7 +520,6 @@ async function checkExitSignal(market, price) {
       market, holding.balance
     );
 
-    // [FIX #5] 실제 체결가 확인
     await sleep(1500);
     let actualExitPrice = price;
     try {
@@ -484,63 +534,60 @@ async function checkExitSignal(market, price) {
       }
     } catch {}
 
-    const pnl = (actualExitPrice - pos.entryPrice) / pos.entryPrice * pos.amount;
-    const pnlPct = (actualExitPrice - pos.entryPrice) / pos.entryPrice * 100;
-    const holdMinutes = Math.round((Date.now() - new Date(pos.entryTime).getTime()) / 60000);
-
-    const icon = exitReason === 'TP' ? '🟢' : exitReason === 'SL' ? '🔴' : '🟡';
-    log(`${icon} ${coin} ${exitReason} 매도: ${pos.entryPrice.toLocaleString()} → ${actualExitPrice.toLocaleString()}원 (${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%, ${pnl > 0 ? '+' : ''}${Math.round(pnl).toLocaleString()}원, ${holdMinutes}분)`, 'trade');
-
-    // 상태 업데이트
-    state.positions = state.positions.filter(p => p.coin !== coin);
-    state.totalPnl += pnl;
-    state.totalTrades++;
-    if (pnl > 0) state.wins++; else state.losses++;
-
-    // 일별 수익
-    const today = new Date().toISOString().slice(0, 10);
-    let todayEntry = state.dailyPnl.find(d => d.date === today);
-    if (!todayEntry) {
-      todayEntry = { date: today, pnl: 0, trades: 0 };
-      state.dailyPnl.unshift(todayEntry);
-    }
-    todayEntry.pnl += pnl;
-    todayEntry.trades++;
-    if (state.dailyPnl.length > 365) state.dailyPnl.length = 365;
-
-    saveState(state);
-
-    const tradeRecord = {
-      action: 'SELL',
-      coin, market, reason: exitReason,
-      entryPrice: pos.entryPrice, exitPrice: actualExitPrice,
-      amount: pos.amount, pnl: Math.round(pnl),
-      pnlPct: +pnlPct.toFixed(2),
-      holdMinutes,
-    };
-
-    appendTradeLog(tradeRecord);
-
-    // 이메일 알림
-    emailService.sendSellAlert(tradeRecord).catch(() => {});
-
-    broadcastToClients({ type: 'state', data: getPublicState() });
+    recordExit(pos, exitReason, actualExitPrice);
   } catch (e) {
-    // [FIX #3] 매도 실패 시 재시도 횟수 관리
     pos.sellRetries = (pos.sellRetries || 0) + 1;
     log(`❌ ${coin} 매도 실패 (${pos.sellRetries}/5): ${e.message}`, 'error');
 
     if (pos.sellRetries >= 5) {
       log(`🚨 ${coin} 매도 5회 연속 실패 — 수동 확인 필요! 포지션 유지`, 'error');
-      // 더 이상 자동 매도 시도하지 않도록 SL을 극단적으로 낮춤
       pos.slPrice = 0;
       pos.tpPrice = 999999999;
       saveState(state);
     }
   } finally {
-    // [FIX #1] 락 해제
     exitLocks.delete(coin);
   }
+}
+
+// ── 청산 기록 공통 함수 ──────────────────────────
+function recordExit(pos, exitReason, actualExitPrice) {
+  const pnl = (actualExitPrice - pos.entryPrice) / pos.entryPrice * pos.amount;
+  const pnlPct = (actualExitPrice - pos.entryPrice) / pos.entryPrice * 100;
+  const holdMinutes = Math.round((Date.now() - new Date(pos.entryTime).getTime()) / 60000);
+
+  const icon = exitReason === 'TP' ? '🟢' : exitReason === 'SL' ? '🔴' : '🟡';
+  log(`${icon} ${pos.coin} ${exitReason} 매도: ${pos.entryPrice.toLocaleString()} → ${actualExitPrice.toLocaleString()}원 (${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%, ${pnl > 0 ? '+' : ''}${Math.round(pnl).toLocaleString()}원, ${holdMinutes}분)`, 'trade');
+
+  state.positions = state.positions.filter(p => p.coin !== pos.coin);
+  state.totalPnl += pnl;
+  state.totalTrades++;
+  if (pnl > 0) state.wins++; else state.losses++;
+
+  const today = new Date().toISOString().slice(0, 10);
+  let todayEntry = state.dailyPnl.find(d => d.date === today);
+  if (!todayEntry) {
+    todayEntry = { date: today, pnl: 0, trades: 0 };
+    state.dailyPnl.unshift(todayEntry);
+  }
+  todayEntry.pnl += pnl;
+  todayEntry.trades++;
+  if (state.dailyPnl.length > 365) state.dailyPnl.length = 365;
+
+  saveState(state);
+
+  const tradeRecord = {
+    action: 'SELL',
+    coin: pos.coin, market: pos.market, reason: exitReason,
+    entryPrice: pos.entryPrice, exitPrice: actualExitPrice,
+    amount: pos.amount, pnl: Math.round(pnl),
+    pnlPct: +pnlPct.toFixed(2),
+    holdMinutes,
+  };
+
+  appendTradeLog(tradeRecord);
+  emailService.sendSellAlert(tradeRecord).catch(() => {});
+  broadcastToClients({ type: 'state', data: getPublicState() });
 }
 
 // ── [FIX #4] 전체 매도 (안전한 방식) ─────────────
@@ -554,6 +601,12 @@ async function sellAllPositions() {
       continue;
     }
     try {
+      // TP 지정가 주문 취소
+      if (pos.tpOrderId) {
+        try { await upbit.cancelOrder(config.upbit.accessKey, config.upbit.secretKey, pos.tpOrderId); } catch {}
+        await sleep(500);
+      }
+
       const holdings = await upbit.getHoldings(config.upbit.accessKey, config.upbit.secretKey);
       const holding = holdings.find(h => h.currency === pos.coin);
 

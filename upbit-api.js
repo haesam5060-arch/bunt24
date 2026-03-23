@@ -125,6 +125,23 @@ async function sellMarket(accessKey, secretKey, market, volume) {
   return request('POST', '/v1/orders', accessKey, secretKey, null, body);
 }
 
+// ── 지정가 매도 (가격+수량 지정) ────────────────────
+async function sellLimit(accessKey, secretKey, market, volume, price) {
+  const body = {
+    market,
+    side: 'ask',
+    volume: String(volume),
+    price: String(price),
+    ord_type: 'limit',
+  };
+  return request('POST', '/v1/orders', accessKey, secretKey, null, body);
+}
+
+// ── 주문 취소 ─────────────────────────────────────
+async function cancelOrder(accessKey, secretKey, uuid) {
+  return request('DELETE', '/v1/order', accessKey, secretKey, { uuid });
+}
+
 // ── 주문 조회 ─────────────────────────────────────
 async function getOrder(accessKey, secretKey, uuid) {
   return request('GET', '/v1/order', accessKey, secretKey, { uuid });
@@ -166,6 +183,8 @@ module.exports = {
   getHoldings,
   buyMarket,
   sellMarket,
+  sellLimit,
+  cancelOrder,
   getOrder,
   getCandles,
   getTopMarkets,
