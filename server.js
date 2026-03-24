@@ -64,6 +64,13 @@ const pendingBuyOrders = {};
 let currentMarkets = [];
 let lastCashWarnTime = 0;
 
+// ── 연속 손절 감시 ──────────────────────────────
+let consecutiveLosses = 0;
+let cooldownUntil = 0; // 자동매매 일시 중지 해제 시각
+
+// ── 코인별 재진입 쿨다운 (cooldownCandles 구현) ──
+const coinCooldowns = {}; // { coin: cooldownExpiresAt (timestamp) }
+
 // ── 로깅 ──────────────────────────────────────────
 const logs = [];
 function log(msg, level = 'info') {
@@ -183,7 +190,18 @@ async function scanTopCoins() {
     const strat = config.strategy;
     const topCoins = await upbit.getTopMarkets(strat.topCoinsCount || 20);
 
-    state.watchlist = topCoins.map(t => ({
+    // 최소 코인 가격 필터 (500원 미만 코인 제외 — 호가 단위 문제)
+    const minCoinPrice = strat.minCoinPrice || 0;
+    const filtered = minCoinPrice > 0
+      ? topCoins.filter(t => t.price >= minCoinPrice)
+      : topCoins;
+
+    if (filtered.length < topCoins.length) {
+      const excluded = topCoins.filter(t => t.price < minCoinPrice).map(t => t.coin);
+      log(`${excluded.length}개 저가 코인 제외 (${minCoinPrice}원 미만): ${excluded.join(', ')}`, 'info');
+    }
+
+    state.watchlist = filtered.map(t => ({
       market: t.market,
       coin: t.coin,
       price: t.price,
@@ -314,8 +332,20 @@ async function checkEntrySignal(market, price) {
   const coin = market.replace('KRW-', '');
   const strat = config.strategy;
 
+  // 연속 손절 쿨다운 체크
+  if (cooldownUntil > 0) {
+    if (Date.now() < cooldownUntil) return; // 아직 쿨다운 중
+    // 쿨다운 해제
+    log(`🔄 쿨다운 해제 → 자동매매 재시작 (연속 손절 카운터 초기화)`, 'info');
+    consecutiveLosses = 0;
+    cooldownUntil = 0;
+  }
+
   // 제외 코인 필터
   if (strat.excludeCoins && strat.excludeCoins.includes(coin)) return;
+
+  // 최소 가격 필터 (호가 단위 문제 방지)
+  if (strat.minCoinPrice && price < strat.minCoinPrice) return;
 
   // 시간대 필터
   if (strat.excludeHours && strat.excludeHours.length > 0) {
@@ -330,6 +360,9 @@ async function checkEntrySignal(market, price) {
   // 같은 코인 이미 보유 or 대기 중이면 스킵
   if (state.positions.some(p => p.coin === coin)) return;
   if (pendingBuyOrders[coin]) return;
+
+  // 코인별 재진입 쿨다운 체크
+  if (coinCooldowns[coin] && Date.now() < coinCooldowns[coin]) return;
 
   // 동시 실행 방지
   if (entryLocks.has(coin)) return;
@@ -425,6 +458,21 @@ async function checkEntrySignal(market, price) {
   }
 }
 
+// ── 대기 주문 전체 취소 (쿨다운 시) ─────────────────
+async function cancelAllPendingOrders() {
+  const keys = Object.keys(pendingBuyOrders);
+  for (const coin of keys) {
+    const pending = pendingBuyOrders[coin];
+    try {
+      await upbit.cancelOrder(config.upbit.accessKey, config.upbit.secretKey, pending.orderId);
+      log(`🚫 쿨다운 → ${coin} 대기 매수 취소`, 'warn');
+    } catch (e) {
+      log(`${coin} 대기 주문 취소 실패: ${e.message}`, 'error');
+    }
+    delete pendingBuyOrders[coin];
+  }
+}
+
 // ── 미체결 매수 주문 체결 확인 + 타임아웃 관리 ─────
 async function checkPendingBuyOrders() {
   const keys = Object.keys(pendingBuyOrders);
@@ -470,10 +518,13 @@ async function checkPendingBuyOrders() {
           log(`${coin} TP 매도 예약 실패: ${e.message}`, 'warn');
         }
 
+        // 매수 수수료 0.05% 반영 (실질 진입 단가)
+        const entryWithCommission = actualEntryPrice * (1 + 0.0005);
+
         const position = {
           coin,
           market: pending.market,
-          entryPrice: actualEntryPrice,
+          entryPrice: entryWithCommission,
           tpPrice: pending.tpPrice,
           slPrice: pending.slPrice,
           amount: pending.amount,
@@ -568,6 +619,8 @@ async function checkExitSignal(market, price) {
     // 최고가 추적 (트레일링 스탑용)
     if (!pos.highSinceEntry || price > pos.highSinceEntry) {
       pos.highSinceEntry = price;
+      // highSinceEntry 변경 시 state 저장 (서버 재시작 시 유지)
+      saveState(state);
     }
 
     // 트레일링 스탑 체크
@@ -654,8 +707,13 @@ async function checkExitSignal(market, price) {
 
 // ── 청산 기록 공통 함수 ──────────────────────────
 function recordExit(pos, exitReason, actualExitPrice) {
-  // 매도 수수료 0.05% 차감 (매수 수수료는 체결가에 이미 포함)
+  // 매도 수수료 0.05% 차감 (매수 수수료는 entryPrice에 이미 반영됨)
   const netExitPrice = actualExitPrice * (1 - 0.0005);
+
+  // 코인별 재진입 쿨다운 설정
+  const candleMin = config.strategy.candleMinute || 5;
+  const cooldownCandles = config.strategy.cooldownCandles || 3;
+  coinCooldowns[pos.coin] = Date.now() + (cooldownCandles * candleMin * 60 * 1000);
   const pnl = (netExitPrice - pos.entryPrice) / pos.entryPrice * pos.amount;
   const pnlPct = (netExitPrice - pos.entryPrice) / pos.entryPrice * 100;
   const holdMinutes = Math.round((Date.now() - new Date(pos.entryTime).getTime()) / 60000);
@@ -667,6 +725,23 @@ function recordExit(pos, exitReason, actualExitPrice) {
   state.totalPnl += pnl;
   state.totalTrades++;
   if (pnl > 0) state.wins++; else state.losses++;
+
+  // ── 연속 손절 카운터 ──
+  if (exitReason === 'SL') {
+    consecutiveLosses++;
+    log(`⚠️ 연속 손절 ${consecutiveLosses}회`, 'warn');
+    if (consecutiveLosses >= 10) {
+      cooldownUntil = Date.now() + 3600000; // 1시간 쿨다운
+      log(`🚨 연속 손절 ${consecutiveLosses}회 → 자동매매 1시간 중지 (${new Date(cooldownUntil).toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' })} 까지)`, 'warn');
+      // 대기 중인 매수 주문 전부 취소
+      cancelAllPendingOrders().catch(e => log(`대기 주문 취소 실패: ${e.message}`, 'error'));
+    }
+  } else if (exitReason === 'TP' || exitReason === 'TRAIL') {
+    if (consecutiveLosses > 0) {
+      log(`✅ 익절 발생 → 연속 손절 카운터 초기화 (${consecutiveLosses} → 0)`, 'info');
+    }
+    consecutiveLosses = 0;
+  }
 
   const today = new Date().toISOString().slice(0, 10);
   let todayEntry = state.dailyPnl.find(d => d.date === today);
@@ -814,6 +889,9 @@ function getPublicState() {
     })),
     autoTrading: config.autoTrading,
     lastScan: state.lastScan,
+    consecutiveLosses,
+    cooldownUntil: cooldownUntil > 0 ? cooldownUntil : null,
+    cooldownRemaining: cooldownUntil > Date.now() ? Math.round((cooldownUntil - Date.now()) / 1000) : 0,
   };
 }
 

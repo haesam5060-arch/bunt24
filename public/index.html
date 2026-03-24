@@ -110,6 +110,7 @@
   <h1>🪙 <span>24번트</span> 코인 스캘핑</h1>
   <div class="status-bar">
     <span id="tradingBadge" class="badge off">OFF</span>
+    <span id="cooldownBadge" class="badge off" style="display:none">쿨다운</span>
     <span id="wsStatus" class="badge off">연결 중</span>
   </div>
 </div>
@@ -310,6 +311,17 @@ function updateState(s) {
   tb.textContent = s.autoTrading ? 'ON' : 'OFF';
   const btn = document.getElementById('tradingBtn');
   btn.className = 'btn ' + (s.autoTrading ? 'on' : '');
+
+  // 쿨다운 뱃지
+  const cb = document.getElementById('cooldownBadge');
+  if (s.cooldownRemaining > 0) {
+    const min = Math.floor(s.cooldownRemaining / 60);
+    const sec = s.cooldownRemaining % 60;
+    cb.style.display = 'inline-block';
+    cb.textContent = `쿨다운 ${min}:${String(sec).padStart(2,'0')} (연속${s.consecutiveLosses}손절)`;
+  } else {
+    cb.style.display = 'none';
+  }
 
   // 오늘 수익
   const today = new Date().toISOString().slice(0, 10);
