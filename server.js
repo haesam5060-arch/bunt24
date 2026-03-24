@@ -52,11 +52,15 @@ if (config.email) {
   emailService.init(config.email);
 }
 
-// ── [FIX #1] 동시 실행 방지 락 ───────────────────
+// ── 동시 실행 방지 락 ───────────────────
 const entryLocks = new Set();  // 매수 중인 코인
 const exitLocks = new Set();   // 매도 중인 코인
 
-// ── [FIX #6] WebSocket 재연결용 마켓 리스트 저장 ──
+// ── 미체결 지정가 매수 주문 관리 ──────────────────
+// { coin: { orderId, market, limitPrice, tpPrice, slPrice, amount, volume, placedAt } }
+const pendingBuyOrders = {};
+
+// ── WebSocket 재연결용 마켓 리스트 저장 ──
 let currentMarkets = [];
 let lastCashWarnTime = 0;
 
@@ -305,11 +309,12 @@ async function check1HTrend(market) {
 }
 
 // ── 진입 시그널 체크 (실시간) ─────────────────────
+// 지정가 매수: OB 하단 가격으로 주문 → 체결 대기 → 5분 미체결 시 취소
 async function checkEntrySignal(market, price) {
   const coin = market.replace('KRW-', '');
   const strat = config.strategy;
 
-  // 제외 코인 필터 (절대 매매 금지)
+  // 제외 코인 필터
   if (strat.excludeCoins && strat.excludeCoins.includes(coin)) return;
 
   // 시간대 필터
@@ -318,13 +323,15 @@ async function checkEntrySignal(market, price) {
     if (strat.excludeHours.includes(parseInt(hour))) return;
   }
 
-  // 최대 포지션 수 체크
-  if (state.positions.length >= strat.maxPositions) return;
+  // 최대 포지션 수 + 대기 주문 합산 체크
+  const pendingCount = Object.keys(pendingBuyOrders).length;
+  if (state.positions.length + pendingCount >= strat.maxPositions) return;
 
-  // 같은 코인 이미 보유 중이면 스킵
+  // 같은 코인 이미 보유 or 대기 중이면 스킵
   if (state.positions.some(p => p.coin === coin)) return;
+  if (pendingBuyOrders[coin]) return;
 
-  // [FIX #1] 동시 실행 방지
+  // 동시 실행 방지
   if (entryLocks.has(coin)) return;
 
   // 활성 OB 확인
@@ -339,7 +346,7 @@ async function checkEntrySignal(market, price) {
   entryLocks.add(coin);
 
   try {
-    // 1시간봉 추세 확인 (설정으로 ON/OFF)
+    // 추세 필터 (설정으로 ON/OFF)
     if (strat.useTrendFilter) {
       const trendOk = await check1HTrend(market);
       if (!trendOk) {
@@ -348,13 +355,33 @@ async function checkEntrySignal(market, price) {
       }
     }
 
-    // [FIX #2] 실제 업비트 잔고 조회
+    // 지정가 매수 가격 = OB 하단 (현재가보다 낮은 가격, 호가 단위 맞춤)
+    const buyDiscount = strat.buyDiscountPct || 0.5;
+    const rawLimitPrice = Math.min(touchedOB.bottom, price * (1 - buyDiscount / 100));
+    const limitPrice = upbit.roundToTick(rawLimitPrice, 'down');
+
+    // TP = 지정가 매수가 기준 +2% 이상 (swingHigh와 비교해서 높은 쪽, 호가 단위 올림)
+    const minTpPct = strat.minTpPct || 2.0;
+    const tpFromSwing = touchedOB.swingHigh;
+    const tpFromMinPct = limitPrice * (1 + minTpPct / 100);
+    const tpPrice = upbit.roundToTick(Math.max(tpFromSwing, tpFromMinPct), 'up');
+
+    // 예상 수익률 체크
+    const expectedPct = (tpPrice - limitPrice) / limitPrice * 100;
+    if (expectedPct < minTpPct) {
+      log(`${coin} OB 터치했으나 TP 너무 가까움 (${expectedPct.toFixed(2)}%) — 스킵`, 'warn');
+      return;
+    }
+
+    // SL = 지정가 매수가 기준 아래로 (호가 단위 내림)
+    const slPrice = upbit.roundToTick(limitPrice * (1 - (strat.slPct || 0.5) / 100), 'down');
+
+    // 잔고 조회
     const availCash = await getAvailableCash();
-    const availSlots = strat.maxPositions - state.positions.length;
-    const allocAmount = Math.floor(availCash * 0.995 / availSlots); // 0.5% 여유 (수수료+버퍼)
+    const availSlots = strat.maxPositions - state.positions.length - pendingCount;
+    const allocAmount = Math.floor(availCash * 0.995 / Math.max(availSlots, 1));
 
     if (allocAmount < strat.minOrderAmount) {
-      // 자금 부족 로그 스팸 방지 — 5분에 1번만
       const now = Date.now();
       if (!lastCashWarnTime || now - lastCashWarnTime > 5 * 60 * 1000) {
         log(`자금 부족: ${Math.round(availCash).toLocaleString()}원 (필요: ${strat.minOrderAmount.toLocaleString()}원)`, 'warn');
@@ -363,105 +390,135 @@ async function checkEntrySignal(market, price) {
       return;
     }
 
-    // 진입/익절/손절 가격
-    const prices = ob.calcEntryExitPrices(touchedOB, price, strat);
+    // 매수 수량 계산 (소수점 8자리까지)
+    const buyVolume = Math.floor(allocAmount / limitPrice * 100000000) / 100000000;
 
-    // [FIX #8] 최소 수익률 필터 — TP가 진입가 대비 minTpPct% 미만이면 스킵
-    const expectedPct = (prices.tpPrice - price) / price * 100;
-    const minTpPct = strat.minTpPct || 0.5;
-    if (expectedPct < minTpPct) {
-      log(`${coin} OB 터치했으나 TP 너무 가까움 (${expectedPct.toFixed(2)}%) — 스킵`, 'warn');
-      return;
-    }
+    log(`🎯 ${coin} 지정가 매수 주문! ${Math.round(limitPrice).toLocaleString()}원 × ${buyVolume.toFixed(4)}개 (현재가 ${price.toLocaleString()}원, 할인 ${buyDiscount}%) | TP: ${Math.round(tpPrice).toLocaleString()} SL: ${Math.round(slPrice).toLocaleString()}`, 'trade');
 
-    log(`🎯 ${coin} OB 터치! 현재가 ${price.toLocaleString()}원 (OB: ${touchedOB.bottom.toLocaleString()}~${touchedOB.top.toLocaleString()}) | 투자금 ${allocAmount.toLocaleString()}원`, 'trade');
-
-    // 매수 실행
-    const result = await upbit.buyMarket(
+    // 지정가 매수 주문
+    const result = await upbit.buyLimit(
       config.upbit.accessKey, config.upbit.secretKey,
-      market, allocAmount
+      market, buyVolume, limitPrice
     );
-
-    // [FIX #5] 실제 체결가/수량 확인 (1초 대기 후 주문 조회)
-    await sleep(1500);
-    let actualEntryPrice = price;
-    let actualVolume = 0;
-    try {
-      const orderInfo = await upbit.getOrder(config.upbit.accessKey, config.upbit.secretKey, result.uuid);
-      if (orderInfo.trades && orderInfo.trades.length > 0) {
-        let totalFunds = 0, totalVol = 0;
-        for (const t of orderInfo.trades) {
-          totalFunds += parseFloat(t.funds);
-          totalVol += parseFloat(t.volume);
-        }
-        if (totalVol > 0) {
-          actualEntryPrice = totalFunds / totalVol;
-          actualVolume = totalVol;
-        }
-      }
-      log(`📊 ${coin} 실제 체결가: ${actualEntryPrice.toLocaleString()}원 × ${actualVolume}개 (WebSocket: ${price.toLocaleString()}원)`, 'info');
-    } catch (e) {
-      log(`${coin} 체결가 조회 실패 — WebSocket 가격 사용: ${price.toLocaleString()}원`, 'warn');
-    }
 
     touchedOB.used = true;
 
-    // 실제 체결가 기준으로 TP/SL 재계산
-    const finalPrices = ob.calcEntryExitPrices(touchedOB, actualEntryPrice, strat);
-
-    // TP 지정가 매도 예약 (슬리피지 방지)
-    let tpOrderId = null;
-    if (actualVolume > 0) {
-      try {
-        const tpOrder = await upbit.sellLimit(
-          config.upbit.accessKey, config.upbit.secretKey,
-          market, actualVolume, finalPrices.tpPrice
-        );
-        tpOrderId = tpOrder.uuid;
-        log(`📌 ${coin} TP 지정가 매도 예약: ${finalPrices.tpPrice.toLocaleString()}원 × ${actualVolume}개`, 'info');
-      } catch (e) {
-        log(`${coin} TP 지정가 예약 실패: ${e.message} — WebSocket 감시로 폴백`, 'warn');
-      }
-    }
-
-    const position = {
-      coin,
-      market,
-      entryPrice: actualEntryPrice,
-      tpPrice: finalPrices.tpPrice,
-      slPrice: finalPrices.slPrice,
-      amount: allocAmount,
-      volume: actualVolume,
+    // 미체결 주문으로 등록 (5분 타이머)
+    pendingBuyOrders[coin] = {
       orderId: result.uuid,
-      tpOrderId,              // TP 지정가 매도 주문 ID
-      entryTime: new Date().toISOString(),
+      market,
+      limitPrice,
+      tpPrice,
+      slPrice,
+      amount: allocAmount,
+      volume: buyVolume,
+      placedAt: Date.now(),
       obImpulse: touchedOB.impulsePct,
-      sellRetries: 0,
     };
 
-    state.positions.push(position);
-    saveState(state);
-
-    log(`✅ ${coin} 매수 완료: ${actualEntryPrice.toLocaleString()}원 × ${allocAmount.toLocaleString()}원 | TP: ${finalPrices.tpPrice.toLocaleString()} SL: ${finalPrices.slPrice.toLocaleString()}`, 'trade');
-
-    // 이메일 알림
-    emailService.sendBuyAlert(position).catch(() => {});
-
-    appendTradeLog({
-      action: 'BUY',
-      coin, market,
-      price: Math.round(actualEntryPrice),
-      amount: allocAmount,
-      tpPrice: Math.round(finalPrices.tpPrice),
-      slPrice: Math.round(finalPrices.slPrice),
-    });
-
+    log(`📋 ${coin} 지정가 매수 대기 중 (5분 내 미체결 시 자동 취소)`, 'info');
     broadcastToClients({ type: 'state', data: getPublicState() });
   } catch (e) {
-    log(`❌ ${coin} 매수 실패: ${e.message}`, 'error');
+    log(`❌ ${coin} 매수 주문 실패: ${e.message}`, 'error');
   } finally {
-    // [FIX #1] 락 해제
     entryLocks.delete(coin);
+  }
+}
+
+// ── 미체결 매수 주문 체결 확인 + 타임아웃 관리 ─────
+async function checkPendingBuyOrders() {
+  const keys = Object.keys(pendingBuyOrders);
+  if (keys.length === 0) return;
+
+  for (const coin of keys) {
+    const pending = pendingBuyOrders[coin];
+    if (!pending) continue;
+
+    try {
+      const orderInfo = await upbit.getOrder(
+        config.upbit.accessKey, config.upbit.secretKey, pending.orderId
+      );
+
+      // 체결 완료
+      if (orderInfo.state === 'done') {
+        let actualEntryPrice = pending.limitPrice;
+        let actualVolume = pending.volume;
+
+        if (orderInfo.trades && orderInfo.trades.length > 0) {
+          let totalFunds = 0, totalVol = 0;
+          for (const t of orderInfo.trades) {
+            totalFunds += parseFloat(t.funds);
+            totalVol += parseFloat(t.volume);
+          }
+          if (totalVol > 0) {
+            actualEntryPrice = totalFunds / totalVol;
+            actualVolume = totalVol;
+          }
+        }
+
+        // TP 지정가 매도 예약 (호가 단위 적용)
+        let tpOrderId = null;
+        const tpSellPrice = upbit.roundToTick(pending.tpPrice, 'up');
+        try {
+          const tpOrder = await upbit.sellLimit(
+            config.upbit.accessKey, config.upbit.secretKey,
+            pending.market, actualVolume, tpSellPrice
+          );
+          tpOrderId = tpOrder.uuid;
+          log(`📌 ${coin} TP 지정가 매도 예약: ${Math.round(pending.tpPrice).toLocaleString()}원`, 'info');
+        } catch (e) {
+          log(`${coin} TP 매도 예약 실패: ${e.message}`, 'warn');
+        }
+
+        const position = {
+          coin,
+          market: pending.market,
+          entryPrice: actualEntryPrice,
+          tpPrice: pending.tpPrice,
+          slPrice: pending.slPrice,
+          amount: pending.amount,
+          volume: actualVolume,
+          orderId: pending.orderId,
+          tpOrderId,
+          entryTime: new Date().toISOString(),
+          obImpulse: pending.obImpulse,
+          sellRetries: 0,
+        };
+
+        state.positions.push(position);
+        delete pendingBuyOrders[coin];
+        saveState(state);
+
+        log(`✅ ${coin} 지정가 매수 체결! ${Math.round(actualEntryPrice).toLocaleString()}원 × ${pending.amount.toLocaleString()}원 | TP: ${Math.round(pending.tpPrice).toLocaleString()} SL: ${Math.round(pending.slPrice).toLocaleString()}`, 'trade');
+
+        emailService.sendBuyAlert(position).catch(() => {});
+        appendTradeLog({
+          action: 'BUY', coin, market: pending.market,
+          price: Math.round(actualEntryPrice), amount: pending.amount,
+          tpPrice: Math.round(pending.tpPrice), slPrice: Math.round(pending.slPrice),
+        });
+        broadcastToClients({ type: 'state', data: getPublicState() });
+        continue;
+      }
+
+      // 5분 초과 미체결 → 취소
+      const elapsed = Date.now() - pending.placedAt;
+      if (elapsed > 5 * 60 * 1000) {
+        try {
+          await upbit.cancelOrder(config.upbit.accessKey, config.upbit.secretKey, pending.orderId);
+          log(`⏰ ${coin} 매수 주문 5분 미체결 — 취소 (${Math.round(pending.limitPrice).toLocaleString()}원)`, 'warn');
+        } catch (e) {
+          log(`${coin} 매수 취소 실패: ${e.message}`, 'warn');
+        }
+        delete pendingBuyOrders[coin];
+        broadcastToClients({ type: 'state', data: getPublicState() });
+      }
+
+    } catch (e) {
+      log(`${coin} 매수 주문 조회 실패: ${e.message}`, 'warn');
+    }
+
+    await sleep(200); // API 속도 제한
   }
 }
 
@@ -750,6 +807,11 @@ function getPublicState() {
       if (active.length > 0) acc[coin] = active;
       return acc;
     }, {}),
+    pendingOrders: Object.entries(pendingBuyOrders).map(([coin, p]) => ({
+      coin, market: p.market, limitPrice: p.limitPrice,
+      tpPrice: p.tpPrice, slPrice: p.slPrice, amount: p.amount,
+      elapsed: Math.round((Date.now() - p.placedAt) / 1000),
+    })),
     autoTrading: config.autoTrading,
     lastScan: state.lastScan,
   };
@@ -875,6 +937,9 @@ const server = app.listen(PORT, async () => {
   // 1분마다 OB 업데이트 (autoTrading ON일 때만)
   const obInterval = (config.strategy.candleMinute || 1) * 60 * 1000;
   setInterval(() => { if (config.autoTrading) updateAllOBs(); }, obInterval);
+
+  // 10초마다 미체결 매수 주문 체결 확인 + 5분 타임아웃
+  setInterval(() => { if (config.autoTrading) checkPendingBuyOrders(); }, 10000);
 });
 
 // WebSocket 서버

@@ -115,6 +115,40 @@ async function buyMarket(accessKey, secretKey, market, amount) {
   return request('POST', '/v1/orders', accessKey, secretKey, null, body);
 }
 
+// ── 업비트 호가 단위 (KRW 마켓) ─────────────────────
+function tickSize(price) {
+  if (price >= 2000000) return 1000;
+  if (price >= 1000000) return 500;
+  if (price >= 500000) return 100;
+  if (price >= 100000) return 50;
+  if (price >= 10000) return 10;
+  if (price >= 1000) return 5;
+  if (price >= 100) return 1;
+  if (price >= 10) return 0.1;
+  if (price >= 1) return 0.01;
+  if (price >= 0.1) return 0.001;
+  if (price >= 0.01) return 0.0001;
+  return 0.00001;
+}
+
+function roundToTick(price, direction = 'down') {
+  const tick = tickSize(price);
+  if (direction === 'down') return Math.floor(price / tick) * tick;
+  return Math.ceil(price / tick) * tick;
+}
+
+// ── 지정가 매수 (가격+금액 지정) ─────────────────────
+async function buyLimit(accessKey, secretKey, market, volume, price) {
+  const body = {
+    market,
+    side: 'bid',
+    volume: String(volume),
+    price: String(price),
+    ord_type: 'limit',
+  };
+  return request('POST', '/v1/orders', accessKey, secretKey, null, body);
+}
+
 // ── 시장가 매도 (수량 기준) ───────────────────────
 async function sellMarket(accessKey, secretKey, market, volume) {
   const body = {
@@ -183,6 +217,7 @@ module.exports = {
   getBalance,
   getHoldings,
   buyMarket,
+  buyLimit,
   sellMarket,
   sellLimit,
   cancelOrder,
@@ -190,4 +225,5 @@ module.exports = {
   getCandles,
   getTopMarkets,
   getTicker,
+  roundToTick,
 };
