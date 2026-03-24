@@ -152,14 +152,19 @@ function runBacktest(candles, market, scenario) {
     rrRatio = 2,
     trailActivatePct = 0,  // 0이면 트레일링 미사용
     trailPct = 0.3,
+    bearishFilter = 0,
+    impulseMinPct = 2.0,
+    volumeMultiplier = 1.5,
+    impulseLookback = 6,
+    obMaxAge = 24,
   } = scenario;
 
   const config = {
-    impulseMinPct: 2.0,
-    impulseLookback: 6,
-    volumeMultiplier: 1.5,
+    impulseMinPct,
+    impulseLookback,
+    volumeMultiplier,
     volumeAvgWindow: 20,
-    obMaxAge: 24,
+    obMaxAge,
     slPct: 0.8,
   };
 
@@ -267,6 +272,13 @@ function runBacktest(candles, market, scenario) {
     }
 
     // 포지션 없으면 진입 탐색
+    // OB broken 체크 — 봉의 low가 OB 하단 이탈 시 broken 처리
+    for (const o of obs) {
+      if (!o.used && !o.broken && c.low < o.bottom * (1 - config.slPct / 100)) {
+        o.broken = true;
+      }
+    }
+
     // 활성 OB 필터링
     const activeOBs = obs.filter(ob => {
       if (ob.used || ob.broken) return false;
@@ -276,6 +288,15 @@ function runBacktest(candles, market, scenario) {
 
     const touchedOB = checkOBTouch(activeOBs, price);
     if (!touchedOB) continue;
+
+    // 연속 음봉 필터
+    if (bearishFilter > 0 && i >= bearishFilter) {
+      let allBear = true;
+      for (let j = i - bearishFilter; j < i; j++) {
+        if (candles[j].close >= candles[j].open) { allBear = false; break; }
+      }
+      if (allBear) continue;
+    }
 
     // 필터 체크
     if (useHMA && hma) {
@@ -291,7 +312,7 @@ function runBacktest(candles, market, scenario) {
 
     // 진입
     const entryPrice = price * (1 - BUY_DISCOUNT);
-    const sl = touchedOB.bottom * (1 - 0.005);
+    const sl = touchedOB.bottom * (1 - config.slPct / 100);
     const slDist = entryPrice - sl;
     if (slDist <= 0) continue; // 진입가가 SL 이하면 스킵
 
@@ -476,14 +497,22 @@ function aggregateResults(allTrades, scenarioName) {
 
 // ─── 메인 ───────────────────────────────────────────
 
+const BASE = { rrRatio: 2, trailActivatePct: 1.8, trailPct: 0.3, bearishFilter: 2 };
 const OB_SCENARIOS = [
-  { name: '① R:R2 트레일없음',         rrRatio: 2, trailActivatePct: 0 },
-  { name: '② R:R2 트레일1%/0.3%',     rrRatio: 2, trailActivatePct: 1, trailPct: 0.3 },
-  { name: '③ R:R2 트레일1.5%/0.3%',   rrRatio: 2, trailActivatePct: 1.5, trailPct: 0.3 },
-  { name: '④ R:R2 트레일1.8%/0.3%',   rrRatio: 2, trailActivatePct: 1.8, trailPct: 0.3 },
-  { name: '⑤ R:R2 트레일1%/0.5%',     rrRatio: 2, trailActivatePct: 1, trailPct: 0.5 },
-  { name: '⑥ R:R2 트레일1.5%/0.5%',   rrRatio: 2, trailActivatePct: 1.5, trailPct: 0.5 },
-  { name: '⑦ R:R2 트레일1.8%/0.5%',   rrRatio: 2, trailActivatePct: 1.8, trailPct: 0.5 },
+  // A. 임펄스 강도 (OB 뒤 상승폭)
+  { ...BASE, name: '① 임펄스2%+거래량1.5x(현재)', impulseMinPct: 2, volumeMultiplier: 1.5 },
+  { ...BASE, name: '② 임펄스3%+거래량1.5x',      impulseMinPct: 3, volumeMultiplier: 1.5 },
+  { ...BASE, name: '③ 임펄스4%+거래량1.5x',      impulseMinPct: 4, volumeMultiplier: 1.5 },
+  { ...BASE, name: '④ 임펄스5%+거래량1.5x',      impulseMinPct: 5, volumeMultiplier: 1.5 },
+  // B. 거래량 배수
+  { ...BASE, name: '⑤ 임펄스3%+거래량2x',        impulseMinPct: 3, volumeMultiplier: 2.0 },
+  { ...BASE, name: '⑥ 임펄스3%+거래량2.5x',      impulseMinPct: 3, volumeMultiplier: 2.5 },
+  { ...BASE, name: '⑦ 임펄스3%+거래량3x',        impulseMinPct: 3, volumeMultiplier: 3.0 },
+  // C. OB 유효기간
+  { ...BASE, name: '⑧ 임펄스3%+거래량2x+12봉유효', impulseMinPct: 3, volumeMultiplier: 2.0, obMaxAge: 12 },
+  { ...BASE, name: '⑨ 임펄스3%+거래량2x+6봉유효',  impulseMinPct: 3, volumeMultiplier: 2.0, obMaxAge: 6 },
+  // D. 최강 필터 조합
+  { ...BASE, name: '⑩ 임펄스4%+거래량2.5x+12봉',  impulseMinPct: 4, volumeMultiplier: 2.5, obMaxAge: 12 },
 ];
 
 const NOOB_SCENARIOS = [];

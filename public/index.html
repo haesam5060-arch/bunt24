@@ -197,7 +197,7 @@
   <div class="section" id="pendingSection" style="display:none">
     <div class="sec-head" style="border-left:3px solid #d29922">📋 지정가 매수 대기 <span class="cnt" id="pendingBadge">0</span></div>
     <table>
-      <thead><tr><th>코인</th><th>주문가격</th><th>금액</th><th>TP목표</th><th>SL손절</th><th>대기시간</th></tr></thead>
+      <thead><tr><th>코인</th><th>현재가</th><th>주문가격</th><th>금액</th><th>TP목표</th><th>SL손절</th><th>대기시간</th></tr></thead>
       <tbody id="pendingTable"></tbody>
     </table>
   </div>
@@ -259,7 +259,13 @@
 let ws, state = {};
 
 // 가격/금액 포맷: 소수점 제거하고 천단위 콤마
-function fmt(n) { return Math.round(n).toLocaleString(); }
+function fmt(n) {
+  if (n == null || isNaN(n)) return '0';
+  const a = Math.abs(n);
+  if (a >= 100) return Math.round(n).toLocaleString();
+  if (a >= 1) return n.toFixed(2);
+  return n.toFixed(4);
+}
 
 function connectWS() {
   const proto = location.protocol === 'https:' ? 'wss' : 'ws';
@@ -275,6 +281,10 @@ function connectWS() {
     if (msg.type === 'log') addLog(msg.data);
     if (msg.type === 'logs') msg.data.forEach(addLog);
   };
+  ws.onerror = () => {
+    document.getElementById('wsStatus').className = 'badge off';
+    document.getElementById('wsStatus').textContent = '연결오류';
+  };
   ws.onclose = () => {
     document.getElementById('wsStatus').className = 'badge off';
     document.getElementById('wsStatus').textContent = '재연결...';
@@ -283,17 +293,22 @@ function connectWS() {
 }
 
 function updatePrices(prices) {
-  if (!state || !state.positions || state.positions.length === 0) return;
+  // 감시 테이블용 가격 업데이트
+  Object.assign(latestPrices, prices);
+
+  // 포지션 가격 업데이트
   let changed = false;
-  state.positions.forEach(p => {
-    const price = prices[p.market];
-    if (price && price !== p.currentPrice) {
-      p.currentPrice = price;
-      p.unrealizedPnl = +((price - p.entryPrice) / p.entryPrice * 100).toFixed(2);
-      changed = true;
-    }
-  });
-  if (changed) updatePositionCards();
+  if (state && state.positions && state.positions.length > 0) {
+    state.positions.forEach(p => {
+      const price = prices[p.market];
+      if (price && price !== p.currentPrice) {
+        p.currentPrice = price;
+        p.unrealizedPnl = +((price - p.entryPrice) / p.entryPrice * 100).toFixed(2);
+        changed = true;
+      }
+    });
+    if (changed) updatePositionCards();
+  }
 }
 
 function updatePositionCards() {
@@ -349,8 +364,8 @@ function updateState(s) {
   const startDateStr = dailyArr.length > 0 ? dailyArr[0].date : '-';
   document.getElementById('startDate').textContent = startDateStr !== '-' ? `${startDateStr} 시작` : '';
 
-  // 현재 가치 = 원금 + 누적손익
-  const currentVal = initCap + (s.totalPnl || 0);
+  // 현재 가치 = 실제 잔고(balance API) 기반, 없으면 원금+손익 fallback
+  const currentVal = balanceData ? balanceData.totalAsset : (initCap + (s.totalPnl || 0));
   const cvEl = document.getElementById('currentValue');
   cvEl.textContent = fmt(currentVal) + '원';
   cvEl.className = 'hero-value ' + (currentVal >= initCap ? 'green' : 'red');
@@ -364,7 +379,7 @@ function updateState(s) {
   document.getElementById('totalWinRate').textContent = `승률 ${s.winRate}% (${s.totalTrades}건)`;
 
   // 오늘 수익
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
   const todayData = (s.dailyPnl || []).find(d => d.date === today);
   const todayPnlVal = todayData ? todayData.pnl : 0;
   const todayEl = document.getElementById('todayPnl');
@@ -464,8 +479,13 @@ function updateState(s) {
       const elapsed = p.elapsed || 0;
       const min = Math.floor(elapsed / 60);
       const sec = elapsed % 60;
+      const cp = p.currentPrice || 0;
+      const diff = cp && p.limitPrice ? ((cp / p.limitPrice - 1) * 100).toFixed(2) : 0;
+      const diffCls = diff > 0 ? 'green' : diff < 0 ? 'red' : '';
+      const cpText = cp > 0 ? `${fmt(cp)}원 <span class="${diffCls}" style="font-size:11px">(${diff > 0 ? '+' : ''}${diff}%)</span>` : '-';
       return `<tr>
         <td><strong style="color:#d29922">${p.coin}</strong></td>
+        <td>${cpText}</td>
         <td>${fmt(p.limitPrice)}원</td>
         <td>${fmt(p.amount)}원</td>
         <td class="green">${fmt(p.tpPrice)}원</td>
@@ -487,11 +507,13 @@ function addLog(entry) {
   while (area.children.length > 200) area.removeChild(area.lastChild);
 }
 
+let balanceData = null;
 async function loadBalance() {
   try {
     const res = await fetch('/api/balance');
     const b = await res.json();
     if (b.error) return;
+    balanceData = b;
     document.getElementById('realBalance').textContent = fmt(b.krw) + '원';
     document.getElementById('krwAvail').textContent = fmt(b.krwAvailable || 0) + '원';
     document.getElementById('krwLocked').textContent = fmt(b.krwLocked || 0) + '원';

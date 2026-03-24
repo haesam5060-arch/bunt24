@@ -73,8 +73,8 @@ async function sendSellAlert(trade) {
   if (!isReady()) return;
   const now = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul' });
   const isProfit = trade.pnl > 0;
-  const icon = trade.reason === 'TP' ? '🟢' : trade.reason === 'SL' ? '🔴' : '🟡';
-  const reasonText = { TP: '익절', SL: '손절', TIMEOUT: '시간초과', MANUAL: '수동매도' }[trade.reason] || trade.reason;
+  const icon = isProfit ? '🟢' : trade.reason === 'SL' ? '🔴' : '🟡';
+  const reasonText = { TP: '익절', TRAIL: '트레일 익절', SL: '손절', TIMEOUT: '시간초과', MANUAL: '수동매도' }[trade.reason] || trade.reason;
   const bgColor = isProfit ? '#238636' : '#da3634';
   const pnlColor = isProfit ? '#3fb950' : '#f85149';
 

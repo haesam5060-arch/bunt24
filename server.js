@@ -109,7 +109,7 @@ function broadcastToClients(data) {
 
 // 3초마다 포지션 보유 중이면 가격 업데이트 브로드캐스트
 setInterval(() => {
-  if (state.positions.length > 0 && wsClients.length > 0) {
+  if (wsClients.length > 0) {
     broadcastToClients({ type: 'prices', data: latestPrices });
   }
 }, 3000);
@@ -262,7 +262,7 @@ async function updateAllOBs() {
 
       // 시간 기반 유효기간 필터 (obMaxAge × candleMinute분)
       const now = new Date();
-      const maxAgeMs = (strat.obMaxAge || 90) * candleMinute * 60 * 1000;
+      const maxAgeMs = (strat.obMaxAge || 24) * candleMinute * 60 * 1000;
       const activeOBs = obs
         .filter(o => !o.used && !o.broken)
         .filter(o => {
@@ -272,6 +272,10 @@ async function updateAllOBs() {
         .slice(-10);
 
       state.orderBlocks[item.coin] = activeOBs;
+
+      // 최근 5봉 저장 (연속 하락 캔들 필터용)
+      if (!state.recentCandles) state.recentCandles = {};
+      state.recentCandles[item.coin] = candles.slice(-5);
 
       if (activeOBs.length > 0) {
         log(`${item.coin}: ${activeOBs.length}개 OB 활성 (최근: ${activeOBs[activeOBs.length - 1].top.toLocaleString()}~${activeOBs[activeOBs.length - 1].bottom.toLocaleString()}원)`);
@@ -387,13 +391,32 @@ async function checkEntrySignal(market, price) {
   // 동시 실행 방지
   if (entryLocks.has(coin)) return;
 
-  // 활성 OB 확인
+  // 활성 OB 확인 + 실시간 broken 체크
   const activeOBs = state.orderBlocks[coin];
   if (!activeOBs || activeOBs.length === 0) return;
 
+  // 실시간 가격으로 OB broken 업데이트
+  for (const o of activeOBs) {
+    if (!o.used && !o.broken && price < o.bottom * (1 - (strat.slPct || 0.8) / 100)) {
+      o.broken = true;
+    }
+  }
+
   // OB 터치 확인
-  const touchedOB = ob.checkOBTouch(activeOBs, price);
+  const touchedOB = ob.checkOBTouch(activeOBs.filter(o => !o.broken && !o.used), price);
   if (!touchedOB) return;
+
+  // 연속 하락 캔들 필터 — 백테스트 최적값 2봉 (config에서 조정 가능)
+  const bearishFilter = strat.bearishFilter || 2;
+  const recentCandles = state.recentCandles?.[coin];
+  if (recentCandles && recentCandles.length >= bearishFilter) {
+    const lastN = recentCandles.slice(-bearishFilter);
+    const allBearish = lastN.every(c => c.close < c.open);
+    if (allBearish) {
+      log(`${coin} OB 터치했으나 직전 ${bearishFilter}봉 연속 음봉 → 하락추세 스킵`, 'warn');
+      return;
+    }
+  }
 
   // 락 설정
   entryLocks.add(coin);
@@ -413,11 +436,15 @@ async function checkEntrySignal(market, price) {
     const rawLimitPrice = price * (1 - buyDiscount / 100);
     const limitPrice = upbit.roundToTick(rawLimitPrice, 'down');
 
-    // TP = 스캔 시점 현재가 기준 (매수가 아닌 현재가 기준으로 수익률 극대화)
+    // TP = minTpPct 기준 고정 (swing high 참고하되 상한 제한)
     const minTpPct = strat.minTpPct || 2.0;
+    const maxTpPct = minTpPct * 1.5; // TP 상한 = minTpPct의 1.5배 (예: 2.4% → 3.6%)
     const tpFromSwing = touchedOB.swingHigh;
-    const tpFromMinPct = price * (1 + minTpPct / 100);
-    const tpPrice = upbit.roundToTick(Math.max(tpFromSwing, tpFromMinPct), 'up');
+    const tpFromMinPct = limitPrice * (1 + minTpPct / 100);
+    const tpFromMaxPct = limitPrice * (1 + maxTpPct / 100);
+    // swing high가 상한 이내면 사용, 초과하면 상한으로 제한
+    const tpRaw = Math.max(tpFromMinPct, Math.min(tpFromSwing, tpFromMaxPct));
+    const tpPrice = upbit.roundToTick(tpRaw, 'up');
 
     // 예상 수익률 체크 (매수가 기준)
     const expectedPct = (tpPrice - limitPrice) / limitPrice * 100;
@@ -426,25 +453,29 @@ async function checkEntrySignal(market, price) {
       return;
     }
 
-    // SL = 지정가 매수가 기준 아래로 (호가 단위 내림)
-    const slPrice = upbit.roundToTick(limitPrice * (1 - (strat.slPct || 0.5) / 100), 'down');
+    // SL = OB 하단 기준 (ob-engine/backtest와 동일 기준)
+    const slPrice = upbit.roundToTick(touchedOB.bottom * (1 - (strat.slPct || 0.8) / 100), 'down');
 
-    // 잔고 조회
-    const availCash = await getAvailableCash();
-    const availSlots = strat.maxPositions - state.positions.length - pendingCount;
-    const allocAmount = Math.floor(availCash * 0.995 / Math.max(availSlots, 1));
+    // 잔고 조회 — 총자산(KRW+코인평가) 기준 균등 배분
+    const accounts = await upbit.getAccounts(config.upbit.accessKey, config.upbit.secretKey);
+    const krwAcc = accounts.find(a => a.currency === 'KRW');
+    const krwTotal = krwAcc ? parseFloat(krwAcc.balance) + parseFloat(krwAcc.locked || 0) : 0;
+    const krwAvail = krwAcc ? parseFloat(krwAcc.balance) : 0;
+    const allocAmount = Math.floor(krwTotal * 0.995 / strat.maxPositions);
 
-    if (allocAmount < strat.minOrderAmount) {
+    // 실제 주문 금액 = 배분 금액과 가용잔고 중 작은 값
+    const orderAmount = Math.min(allocAmount, Math.floor(krwAvail * 0.995));
+    if (orderAmount < strat.minOrderAmount) {
       const now = Date.now();
       if (!lastCashWarnTime || now - lastCashWarnTime > 5 * 60 * 1000) {
-        log(`자금 부족: ${Math.round(availCash).toLocaleString()}원 (필요: ${strat.minOrderAmount.toLocaleString()}원)`, 'warn');
+        log(`자금 부족: 가용 ${Math.round(krwAvail).toLocaleString()}원 / 배분 ${allocAmount.toLocaleString()}원 (최소: ${strat.minOrderAmount.toLocaleString()}원)`, 'warn');
         lastCashWarnTime = now;
       }
       return;
     }
 
     // 매수 수량 계산 (소수점 8자리까지)
-    const buyVolume = Math.floor(allocAmount / limitPrice * 100000000) / 100000000;
+    const buyVolume = Math.floor(orderAmount / limitPrice * 100000000) / 100000000;
 
     log(`🎯 ${coin} 지정가 매수 주문! ${Math.round(limitPrice).toLocaleString()}원 × ${buyVolume.toFixed(4)}개 (현재가 ${price.toLocaleString()}원, 할인 ${buyDiscount}%) | TP: ${Math.round(tpPrice).toLocaleString()} SL: ${Math.round(slPrice).toLocaleString()}`, 'trade');
 
@@ -463,7 +494,7 @@ async function checkEntrySignal(market, price) {
       limitPrice,
       tpPrice,
       slPrice,
-      amount: allocAmount,
+      amount: orderAmount,
       volume: buyVolume,
       placedAt: Date.now(),
       obImpulse: touchedOB.impulsePct,
@@ -735,7 +766,7 @@ function recordExit(pos, exitReason, actualExitPrice) {
   const netExitPrice = actualExitPrice * (1 - 0.0005);
 
   // 코인별 재진입 쿨다운 설정
-  const candleMin = config.strategy.candleMinute || 5;
+  const candleMin = config.strategy.candleMinute || 1;
   const cooldownCandles = config.strategy.cooldownCandles || 3;
   coinCooldowns[pos.coin] = Date.now() + (cooldownCandles * candleMin * 60 * 1000);
   const pnl = (netExitPrice - pos.entryPrice) / pos.entryPrice * pos.amount;
@@ -767,7 +798,7 @@ function recordExit(pos, exitReason, actualExitPrice) {
     consecutiveLosses = 0;
   }
 
-  const today = new Date().toISOString().slice(0, 10);
+  const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
   let todayEntry = state.dailyPnl.find(d => d.date === today);
   if (!todayEntry) {
     todayEntry = { date: today, pnl: 0, trades: 0 };
@@ -829,8 +860,9 @@ async function sellAllPositions() {
       );
 
       const price = latestPrices[pos.market] || pos.entryPrice;
-      const pnl = (price - pos.entryPrice) / pos.entryPrice * pos.amount;
-      const pnlPct = (price - pos.entryPrice) / pos.entryPrice * 100;
+      const netPrice = price * (1 - 0.0005); // 매도 수수료 0.05% 반영
+      const pnl = (netPrice - pos.entryPrice) / pos.entryPrice * pos.amount;
+      const pnlPct = (netPrice - pos.entryPrice) / pos.entryPrice * 100;
 
       log(`✅ ${pos.coin} 강제 매도 완료 (${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%)`, 'trade');
 
@@ -915,6 +947,7 @@ function getPublicState() {
     }, {}),
     pendingOrders: Object.entries(pendingBuyOrders).map(([coin, p]) => ({
       coin, market: p.market, limitPrice: p.limitPrice,
+      currentPrice: latestPrices[p.market] || 0,
       tpPrice: p.tpPrice, slPrice: p.slPrice, amount: p.amount,
       elapsed: Math.round((Date.now() - p.placedAt) / 1000),
     })),
@@ -1018,6 +1051,12 @@ app.post('/api/force-scan', async (req, res) => {
 });
 
 // [FIX #4] 안전한 전체 매도
+app.post('/api/cancel-pending', async (req, res) => {
+  await cancelAllPendingOrders();
+  log('📋 대기 주문 전체 수동 취소', 'info');
+  res.json({ ok: true });
+});
+
 app.post('/api/sell-all', async (req, res) => {
   await sellAllPositions();
   res.json({ ok: true });
@@ -1041,6 +1080,28 @@ const server = app.listen(PORT, async () => {
 
   // 업비트 잔고 동기화
   await syncPositionsWithUpbit();
+
+  // TP 주문 없는 포지션에 TP 지정가 매도 재설정
+  for (const pos of state.positions) {
+    if (!pos.tpOrderId && pos.tpPrice && pos.tpPrice < 999999999) {
+      try {
+        const tpSellPrice = upbit.roundToTick(pos.tpPrice, 'up');
+        const holding = await upbit.getHoldings(config.upbit.accessKey, config.upbit.secretKey);
+        const h = holding.find(hh => hh.currency === pos.coin);
+        if (h && h.balance > 0) {
+          const tpOrder = await upbit.sellLimit(
+            config.upbit.accessKey, config.upbit.secretKey,
+            pos.market, h.balance, tpSellPrice
+          );
+          pos.tpOrderId = tpOrder.uuid;
+          log(`📌 ${pos.coin} TP 지정가 매도 복구: ${tpSellPrice}원`, 'info');
+          saveState(state);
+        }
+      } catch (e) {
+        log(`${pos.coin} TP 복구 실패: ${e.message}`, 'error');
+      }
+    }
+  }
 
   // 서버 시작 시 미체결 주문 복구 확인
   const pendingKeys = Object.keys(pendingBuyOrders);

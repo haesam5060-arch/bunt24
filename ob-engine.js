@@ -63,7 +63,7 @@ function detectOrderBlocks(candles, config) {
 }
 
 // ── OB 상태 업데이트 (무너진 OB 마킹) ─────────────
-function updateOrderBlocks(obs, currentPrice, currentIndex, config) {
+function updateOrderBlocks(obs, currentPrice, currentIndex, config, currentLow = null) {
   const { obMaxAge = 24 } = config;
 
   for (const ob of obs) {
@@ -75,8 +75,9 @@ function updateOrderBlocks(obs, currentPrice, currentIndex, config) {
       continue;
     }
 
-    // OB 하단 이탈 = 무너짐
-    if (currentPrice < ob.bottom * (1 - (config.slPct || 0.8) / 100)) {
+    // OB 하단 이탈 = 무너짐 (캔들 low 또는 현재가 기준)
+    const checkPrice = currentLow || currentPrice;
+    if (checkPrice < ob.bottom * (1 - (config.slPct || 0.8) / 100)) {
       ob.broken = true;
     }
   }
