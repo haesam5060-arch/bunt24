@@ -129,6 +129,9 @@ setInterval(() => {
 let upbitWs = null;
 const latestPrices = {};
 
+// v2: 실시간 체결 데이터 (체결강도, 매수/매도 비율)
+const tradeIntensity = {}; // { market: { buyVol, sellVol, lastUpdate, bigBuy } }
+
 let wsReconnectDelay = 5000; // 초기 재연결 대기시간
 const WS_MAX_DELAY = 60000; // 최대 60초
 
@@ -145,10 +148,11 @@ function connectUpbitWebSocket(markets) {
 
   upbitWs.on('open', () => {
     wsReconnectDelay = 5000; // 연결 성공 시 딜레이 초기화
-    log(`업비트 WebSocket 연결 (${markets.length}개 코인 실시간 감시)`);
+    log(`업비트 WebSocket 연결 (${markets.length}개 코인 — ticker+trade 실시간 감시)`);
     const msg = JSON.stringify([
-      { ticket: 'scalper-' + Date.now() },
+      { ticket: 'scalper-v2-' + Date.now() },
       { type: 'ticker', codes: markets, isOnlyRealtime: true },
+      { type: 'trade', codes: markets, isOnlyRealtime: true },
     ]);
     upbitWs.send(msg);
 
@@ -167,6 +171,7 @@ function connectUpbitWebSocket(markets) {
   upbitWs.on('message', (data) => {
     try {
       const parsed = JSON.parse(data.toString());
+
       if (parsed.type === 'ticker') {
         const market = parsed.code;
         const price = parsed.trade_price;
@@ -175,6 +180,37 @@ function connectUpbitWebSocket(markets) {
         if (config.autoTrading) {
           checkEntrySignal(market, price);
           checkExitSignal(market, price);
+        }
+      }
+
+      // v2: 체결 데이터 → 체결강도 집계
+      if (parsed.type === 'trade') {
+        const market = parsed.code;
+        const vol = parsed.trade_volume || 0;
+        const isBuy = parsed.ask_bid === 'BID';
+
+        if (!tradeIntensity[market]) {
+          tradeIntensity[market] = { buyVol: 0, sellVol: 0, lastUpdate: Date.now(), bigBuyCount: 0, totalTrades: 0 };
+        }
+        const ti = tradeIntensity[market];
+
+        // 5분 윈도우 리셋
+        if (Date.now() - ti.lastUpdate > 5 * 60 * 1000) {
+          ti.buyVol = 0;
+          ti.sellVol = 0;
+          ti.bigBuyCount = 0;
+          ti.totalTrades = 0;
+          ti.lastUpdate = Date.now();
+        }
+
+        if (isBuy) ti.buyVol += vol;
+        else ti.sellVol += vol;
+        ti.totalTrades++;
+
+        // 대량 매수 감지 (평균 체결량의 5배 이상)
+        const avgVol = (ti.buyVol + ti.sellVol) / Math.max(ti.totalTrades, 1);
+        if (isBuy && vol > avgVol * 5) {
+          ti.bigBuyCount++;
         }
       }
     } catch {}
@@ -421,6 +457,20 @@ async function checkEntrySignal(market, price) {
   if (Date.now() - cached.updatedAt > 5 * 60 * 1000) return; // 5분 초과 시그널 무시
 
   const signal = cached.signal;
+
+  // v2: 체결강도 확인 (매수세 > 매도세 필요)
+  const ti = tradeIntensity[market];
+  if (ti && ti.totalTrades > 10) {
+    const intensity = ti.sellVol > 0 ? (ti.buyVol / ti.sellVol * 100) : 100;
+    if (intensity < 80) {
+      // 매도세가 강하면 진입하지 않음
+      return;
+    }
+    // 체결강도 120% 이상이면 로그
+    if (intensity >= 120 || ti.bigBuyCount > 0) {
+      log(`${coin} 체결강도 ${intensity.toFixed(0)}% (매수세 강함${ti.bigBuyCount > 0 ? ', 대량매수 ' + ti.bigBuyCount + '건' : ''})`, 'info');
+    }
+  }
 
   // 락 설정
   entryLocks.add(coin);
@@ -950,6 +1000,16 @@ function getPublicState() {
       signalScore: p.signalScore || 0,
       strategies: p.strategies || '',
     })),
+    // v2: 체결강도 상위 코인
+    topIntensity: Object.entries(tradeIntensity)
+      .filter(([, v]) => v.totalTrades > 10)
+      .map(([market, v]) => ({
+        coin: market.replace('KRW-', ''),
+        intensity: v.sellVol > 0 ? +(v.buyVol / v.sellVol * 100).toFixed(0) : 100,
+        bigBuys: v.bigBuyCount,
+      }))
+      .sort((a, b) => b.intensity - a.intensity)
+      .slice(0, 5),
     // v2: 활성 시그널 요약
     activeSignals: Object.entries(signalCache)
       .filter(([, v]) => v.signal && Date.now() - v.updatedAt < 5 * 60 * 1000)
