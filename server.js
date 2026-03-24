@@ -2,10 +2,10 @@
  * 24번트 — 업비트 오더블록 스캘핑 자동매매 봇
  *
  * 구조:
- *   1) 1시간마다 거래대금 상위 20개 코인 선별
- *   2) 5분마다 각 코인 캔들 수집 → OB 감지
+ *   1) 1시간마다 거래대금 상위 30개 코인 선별
+ *   2) 1분마다 각 코인 1분봉 캔들 수집 → OB 감지
  *   3) WebSocket 실시간 가격 → OB 터치 시 매수
- *   4) 포지션 감시 → TP/SL 도달 시 매도
+ *   4) 포지션 감시 → TP/SL/트레일링 도달 시 매도
  *   5) 대시보드로 실시간 모니터링
  */
 
@@ -205,21 +205,22 @@ async function scanTopCoins() {
   }
 }
 
-// ── OB 업데이트 (5분마다) ─────────────────────────
+// ── OB 업데이트 (1분마다) ─────────────────────────
 async function updateAllOBs() {
   const strat = config.strategy;
+  const candleMinute = strat.candleMinute || 1;
 
   for (const item of state.watchlist) {
     try {
-      const rawCandles = await upbit.getCandles(item.market, 5, 200);
+      const rawCandles = await upbit.getCandles(item.market, candleMinute, 200);
       const candles = ob.normalizeCandles(rawCandles);
       if (candles.length < 50) continue;
 
       const obs = ob.detectOrderBlocks(candles, strat);
 
-      // [FIX #7] 시간 기반 유효기간 필터 (obMaxAge × 5분)
+      // 시간 기반 유효기간 필터 (obMaxAge × candleMinute분)
       const now = new Date();
-      const maxAgeMs = (strat.obMaxAge || 24) * 5 * 60 * 1000;
+      const maxAgeMs = (strat.obMaxAge || 90) * candleMinute * 60 * 1000;
       const activeOBs = obs
         .filter(o => !o.used && !o.broken)
         .filter(o => {
@@ -338,14 +339,13 @@ async function checkEntrySignal(market, price) {
   entryLocks.add(coin);
 
   try {
-    // [FIX #9] 거래량 활성도 체크 — 백테스트 결과 필터 제거가 더 높은 수익 (EV +1.696% vs +1.612%)
-    // 거래량 필터가 좋은 신호까지 걸러내고 있었음 → 제거
-
-    // [FIX #10] 1시간봉 추세 확인 — 하락 추세면 역추세 진입 방지
-    const trendOk = await check1HTrend(market);
-    if (!trendOk) {
-      log(`${coin} OB 터치했으나 1H 하락추세 — 스킵`, 'warn');
-      return;
+    // 1시간봉 추세 확인 (설정으로 ON/OFF)
+    if (strat.useTrendFilter) {
+      const trendOk = await check1HTrend(market);
+      if (!trendOk) {
+        log(`${coin} OB 터치했으나 1H 하락추세 — 스킵`, 'warn');
+        return;
+      }
     }
 
     // [FIX #2] 실제 업비트 잔고 조회
@@ -368,7 +368,7 @@ async function checkEntrySignal(market, price) {
 
     // [FIX #8] 최소 수익률 필터 — TP가 진입가 대비 minTpPct% 미만이면 스킵
     const expectedPct = (prices.tpPrice - price) / price * 100;
-    const minTpPct = strat.minTpPct || 2.0;
+    const minTpPct = strat.minTpPct || 0.5;
     if (expectedPct < minTpPct) {
       log(`${coin} OB 터치했으나 TP 너무 가까움 (${expectedPct.toFixed(2)}%) — 스킵`, 'warn');
       return;
@@ -506,12 +506,32 @@ async function checkExitSignal(market, price) {
 
     // ── SL / TIMEOUT 체크 ──
     let exitReason = null;
+    const candleMin = config.strategy.candleMinute || 1;
 
-    if (price <= pos.slPrice) {
+    // 최고가 추적 (트레일링 스탑용)
+    if (!pos.highSinceEntry || price > pos.highSinceEntry) {
+      pos.highSinceEntry = price;
+    }
+
+    // 트레일링 스탑 체크
+    const trailActivate = config.strategy.trailActivatePct || 0;
+    const trailPct = config.strategy.trailPct || 0;
+    if (trailActivate > 0 && trailPct > 0 && pos.highSinceEntry) {
+      const gain = (pos.highSinceEntry - pos.entryPrice) / pos.entryPrice * 100;
+      if (gain >= trailActivate) {
+        const trailStop = pos.highSinceEntry * (1 - trailPct / 100);
+        if (price <= trailStop) {
+          exitReason = 'TRAIL';
+        }
+      }
+    }
+
+    if (!exitReason && price <= pos.slPrice) {
       exitReason = 'SL';
-    } else {
+    }
+    if (!exitReason) {
       const holdMs = Date.now() - new Date(pos.entryTime).getTime();
-      const maxMs = (config.strategy.maxHoldCandles || 60) * 5 * 60 * 1000;
+      const maxMs = (config.strategy.maxHoldCandles || 60) * candleMin * 60 * 1000;
       if (holdMs >= maxMs) exitReason = 'TIMEOUT';
     }
 
@@ -577,11 +597,13 @@ async function checkExitSignal(market, price) {
 
 // ── 청산 기록 공통 함수 ──────────────────────────
 function recordExit(pos, exitReason, actualExitPrice) {
-  const pnl = (actualExitPrice - pos.entryPrice) / pos.entryPrice * pos.amount;
-  const pnlPct = (actualExitPrice - pos.entryPrice) / pos.entryPrice * 100;
+  // 매도 수수료 0.05% 차감 (매수 수수료는 체결가에 이미 포함)
+  const netExitPrice = actualExitPrice * (1 - 0.0005);
+  const pnl = (netExitPrice - pos.entryPrice) / pos.entryPrice * pos.amount;
+  const pnlPct = (netExitPrice - pos.entryPrice) / pos.entryPrice * 100;
   const holdMinutes = Math.round((Date.now() - new Date(pos.entryTime).getTime()) / 60000);
 
-  const icon = exitReason === 'TP' ? '🟢' : exitReason === 'SL' ? '🔴' : '🟡';
+  const icon = exitReason === 'TP' ? '🟢' : exitReason === 'TRAIL' ? '🔵' : exitReason === 'SL' ? '🔴' : '🟡';
   log(`${icon} ${pos.coin} ${exitReason} 매도: ${pos.entryPrice.toLocaleString()} → ${actualExitPrice.toLocaleString()}원 (${pnlPct > 0 ? '+' : ''}${pnlPct.toFixed(2)}%, ${pnl > 0 ? '+' : ''}${Math.round(pnl).toLocaleString()}원, ${holdMinutes}분)`, 'trade');
 
   state.positions = state.positions.filter(p => p.coin !== pos.coin);
@@ -850,8 +872,9 @@ const server = app.listen(PORT, async () => {
   // 15분마다 종목 재스캔 (autoTrading ON일 때만)
   setInterval(() => { if (config.autoTrading) scanTopCoins(); }, 15 * 60 * 1000);
 
-  // 5분마다 OB 업데이트 (autoTrading ON일 때만)
-  setInterval(() => { if (config.autoTrading) updateAllOBs(); }, 5 * 60 * 1000);
+  // 1분마다 OB 업데이트 (autoTrading ON일 때만)
+  const obInterval = (config.strategy.candleMinute || 1) * 60 * 1000;
+  setInterval(() => { if (config.autoTrading) updateAllOBs(); }, obInterval);
 });
 
 // WebSocket 서버

@@ -472,7 +472,7 @@ async function loadTrades() {
       const actionText = isBuy ? '매수' : '매도';
       const price = isBuy ? t.price : t.exitPrice;
       const pnlHtml = isBuy ? '-' : `<span class="${t.pnl > 0 ? 'green' : 'red'}">${t.pnl > 0 ? '+' : ''}${fmt(t.pnl)}원 (${t.pnlPct > 0 ? '+' : ''}${t.pnlPct}%)</span>`;
-      const reason = t.reason ? ({ TP: '익절', SL: '손절', TIMEOUT: '시간초과', MANUAL: '수동' }[t.reason] || t.reason) : '-';
+      const reason = t.reason ? ({ TP: '익절', TRAIL: '트레일', SL: '손절', TIMEOUT: '시간초과', MANUAL: '수동' }[t.reason] || t.reason) : '-';
       return `<tr>
         <td style="white-space:nowrap">${time}</td>
         <td><strong>${t.coin}</strong></td>
