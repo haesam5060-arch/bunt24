@@ -56,9 +56,16 @@ if (config.email) {
 const entryLocks = new Set();  // 매수 중인 코인
 const exitLocks = new Set();   // 매도 중인 코인
 
-// ── 미체결 지정가 매수 주문 관리 ──────────────────
-// { coin: { orderId, market, limitPrice, tpPrice, slPrice, amount, volume, placedAt } }
-const pendingBuyOrders = {};
+// ── 미체결 지정가 매수 주문 관리 (파일로 영구 저장) ──
+const PENDING_PATH = path.join(__dirname, 'data', 'pending-orders.json');
+function loadPendingOrders() {
+  try { return JSON.parse(fs.readFileSync(PENDING_PATH, 'utf-8')); }
+  catch { return {}; }
+}
+function savePendingOrders() {
+  fs.writeFileSync(PENDING_PATH, JSON.stringify(pendingBuyOrders, null, 2));
+}
+const pendingBuyOrders = loadPendingOrders();
 
 // ── WebSocket 재연결용 마켓 리스트 저장 ──
 let currentMarkets = [];
@@ -111,6 +118,9 @@ setInterval(() => {
 let upbitWs = null;
 const latestPrices = {};
 
+let wsReconnectDelay = 5000; // 초기 재연결 대기시간
+const WS_MAX_DELAY = 60000; // 최대 60초
+
 function connectUpbitWebSocket(markets) {
   if (upbitWs) { try { upbitWs.close(); } catch {} }
   if (!markets || markets.length === 0) return;
@@ -123,6 +133,7 @@ function connectUpbitWebSocket(markets) {
   let pingInterval = null;
 
   upbitWs.on('open', () => {
+    wsReconnectDelay = 5000; // 연결 성공 시 딜레이 초기화
     log(`업비트 WebSocket 연결 (${markets.length}개 코인 실시간 감시)`);
     const msg = JSON.stringify([
       { ticket: 'scalper-' + Date.now() },
@@ -130,11 +141,11 @@ function connectUpbitWebSocket(markets) {
     ]);
     upbitWs.send(msg);
 
-    // 30초마다 PING 전송 (연결 유지)
+    // 20초마다 PING 전송 (연결 유지)
     if (pingInterval) clearInterval(pingInterval);
     pingInterval = setInterval(() => {
       try { if (upbitWs.readyState === WebSocket.OPEN) upbitWs.ping(); } catch {}
-    }, 30000);
+    }, 20000);
   });
 
   // 업비트 WebSocket ping → pong 응답 (연결 유지)
@@ -161,9 +172,10 @@ function connectUpbitWebSocket(markets) {
   upbitWs.on('close', () => {
     if (pingInterval) { clearInterval(pingInterval); pingInterval = null; }
     if (!config.autoTrading) return; // OFF면 재연결 안 함
-    log('업비트 WebSocket 연결 끊김 — 5초 후 재연결', 'warn');
-    // [FIX #6] 저장된 마켓 리스트로 재연결
-    setTimeout(() => connectUpbitWebSocket(currentMarkets), 5000);
+    log(`업비트 WebSocket 연결 끊김 — ${wsReconnectDelay/1000}초 후 재연결`, 'warn');
+    // [FIX #6] 저장된 마켓 리스트로 재연결 (backoff)
+    setTimeout(() => connectUpbitWebSocket(currentMarkets), wsReconnectDelay);
+    wsReconnectDelay = Math.min(wsReconnectDelay * 2, WS_MAX_DELAY);
   });
 
   upbitWs.on('error', (e) => {
@@ -188,7 +200,7 @@ async function getAvailableCash() {
 async function scanTopCoins() {
   try {
     const strat = config.strategy;
-    const topCoins = await upbit.getTopMarkets(strat.topCoinsCount || 20);
+    const topCoins = await upbit.getTopMarkets(0); // 전체 KRW 코인 감시
 
     // 최소 코인 가격 필터 (500원 미만 코인 제외 — 호가 단위 문제)
     const minCoinPrice = strat.minCoinPrice || 0;
@@ -209,11 +221,19 @@ async function scanTopCoins() {
     }));
 
     const markets = topCoins.map(t => t.market);
-    log(`코인 스캔 완료: ${markets.map(m => m.replace('KRW-', '')).join(', ')}`);
+
+    // 보유 포지션 코인을 WebSocket 감시 목록에 반드시 포함 (watchlist에 없어도 SL/TP/TIMEOUT 작동)
+    const posMarkets = state.positions.map(p => p.market).filter(m => !markets.includes(m));
+    if (posMarkets.length > 0) {
+      markets.push(...posMarkets);
+      log(`보유 포지션 ${posMarkets.map(m => m.replace('KRW-', '')).join(', ')} → WebSocket 감시에 추가`, 'info');
+    }
+
+    log(`코인 스캔 완료: 전체 ${topCoins.length}개 중 매매대상 ${filtered.length}개 (${minCoinPrice}원↑)`);
 
     // watchlist 변경 시에만 WebSocket 재연결
-    const oldMarkets = (currentMarkets || []).sort().join(',');
-    const newMarkets = markets.sort().join(',');
+    const oldMarkets = [...(currentMarkets || [])].sort().join(',');
+    const newMarkets = [...markets].sort().join(',');
     if (oldMarkets !== newMarkets || !upbitWs || upbitWs.readyState !== WebSocket.OPEN) {
       connectUpbitWebSocket(markets);
     }
@@ -388,18 +408,18 @@ async function checkEntrySignal(market, price) {
       }
     }
 
-    // 지정가 매수 가격 = OB 하단 (현재가보다 낮은 가격, 호가 단위 맞춤)
-    const buyDiscount = strat.buyDiscountPct || 0.5;
-    const rawLimitPrice = Math.min(touchedOB.bottom, price * (1 - buyDiscount / 100));
+    // 지정가 매수 가격 = 스캔 시점 현재가 -1% (호가 단위 내림)
+    const buyDiscount = strat.buyDiscountPct || 1.0;
+    const rawLimitPrice = price * (1 - buyDiscount / 100);
     const limitPrice = upbit.roundToTick(rawLimitPrice, 'down');
 
-    // TP = 지정가 매수가 기준 +2% 이상 (swingHigh와 비교해서 높은 쪽, 호가 단위 올림)
+    // TP = 스캔 시점 현재가 기준 (매수가 아닌 현재가 기준으로 수익률 극대화)
     const minTpPct = strat.minTpPct || 2.0;
     const tpFromSwing = touchedOB.swingHigh;
-    const tpFromMinPct = limitPrice * (1 + minTpPct / 100);
+    const tpFromMinPct = price * (1 + minTpPct / 100);
     const tpPrice = upbit.roundToTick(Math.max(tpFromSwing, tpFromMinPct), 'up');
 
-    // 예상 수익률 체크
+    // 예상 수익률 체크 (매수가 기준)
     const expectedPct = (tpPrice - limitPrice) / limitPrice * 100;
     if (expectedPct < minTpPct) {
       log(`${coin} OB 터치했으나 TP 너무 가까움 (${expectedPct.toFixed(2)}%) — 스킵`, 'warn');
@@ -436,7 +456,7 @@ async function checkEntrySignal(market, price) {
 
     touchedOB.used = true;
 
-    // 미체결 주문으로 등록 (5분 타이머)
+    // 미체결 주문으로 등록 (5분 타이머) — 파일 영구 저장
     pendingBuyOrders[coin] = {
       orderId: result.uuid,
       market,
@@ -448,6 +468,7 @@ async function checkEntrySignal(market, price) {
       placedAt: Date.now(),
       obImpulse: touchedOB.impulsePct,
     };
+    savePendingOrders();
 
     log(`📋 ${coin} 지정가 매수 대기 중 (5분 내 미체결 시 자동 취소)`, 'info');
     broadcastToClients({ type: 'state', data: getPublicState() });
@@ -471,6 +492,7 @@ async function cancelAllPendingOrders() {
     }
     delete pendingBuyOrders[coin];
   }
+  savePendingOrders();
 }
 
 // ── 미체결 매수 주문 체결 확인 + 타임아웃 관리 ─────
@@ -538,6 +560,7 @@ async function checkPendingBuyOrders() {
 
         state.positions.push(position);
         delete pendingBuyOrders[coin];
+        savePendingOrders();
         saveState(state);
 
         log(`✅ ${coin} 지정가 매수 체결! ${Math.round(actualEntryPrice).toLocaleString()}원 × ${pending.amount.toLocaleString()}원 | TP: ${Math.round(pending.tpPrice).toLocaleString()} SL: ${Math.round(pending.slPrice).toLocaleString()}`, 'trade');
@@ -562,6 +585,7 @@ async function checkPendingBuyOrders() {
           log(`${coin} 매수 취소 실패: ${e.message}`, 'warn');
         }
         delete pendingBuyOrders[coin];
+        savePendingOrders();
         broadcastToClients({ type: 'state', data: getPublicState() });
       }
 
@@ -619,8 +643,7 @@ async function checkExitSignal(market, price) {
     // 최고가 추적 (트레일링 스탑용)
     if (!pos.highSinceEntry || price > pos.highSinceEntry) {
       pos.highSinceEntry = price;
-      // highSinceEntry 변경 시 state 저장 (서버 재시작 시 유지)
-      saveState(state);
+      // 디바운스: 빈번한 저장 방지 (30초마다 자동 저장으로 대체)
     }
 
     // 트레일링 스탑 체크
@@ -652,16 +675,17 @@ async function checkExitSignal(market, price) {
       try {
         await upbit.cancelOrder(config.upbit.accessKey, config.upbit.secretKey, pos.tpOrderId);
         log(`${coin} TP 지정가 주문 취소 완료`, 'info');
-        await sleep(500);
+        await sleep(1500); // locked→balance 전환 대기 (충분히)
       } catch (e) {
         log(`${coin} TP 주문 취소 참고: ${e.message}`, 'warn');
+        await sleep(1000);
       }
     }
 
-    // 보유 수량 조회 후 시장가 매도
+    // 보유 수량 조회 후 시장가 매도 (balance + locked 합산)
     const holdings = await upbit.getHoldings(config.upbit.accessKey, config.upbit.secretKey);
     const holding = holdings.find(h => h.currency === coin);
-    const sellVolume = holding ? (holding.balance || holding.locked || 0) : 0;
+    const sellVolume = holding ? (holding.balance + (holding.locked || 0)) : 0;
 
     if (!holding || sellVolume <= 0) {
       log(`${coin} 보유 수량 없음 — 포지션 정리`, 'warn');
@@ -788,17 +812,20 @@ async function sellAllPositions() {
 
       const holdings = await upbit.getHoldings(config.upbit.accessKey, config.upbit.secretKey);
       const holding = holdings.find(h => h.currency === pos.coin);
+      const totalBalance = holding ? (holding.balance + (holding.locked || 0)) : 0;
 
-      if (!holding || holding.balance <= 0) {
+      if (!holding || totalBalance <= 0) {
         log(`${pos.coin} 보유 수량 없음 — 포지션 정리`, 'warn');
         state.positions = state.positions.filter(p => p.coin !== pos.coin);
         saveState(state);
         continue;
       }
 
+      // locked가 있으면 balance만 매도 (TP 취소 후 대기해야 함)
+      const sellVol = holding.balance > 0 ? holding.balance : totalBalance;
       const result = await upbit.sellMarket(
         config.upbit.accessKey, config.upbit.secretKey,
-        pos.market, holding.balance
+        pos.market, sellVol
       );
 
       const price = latestPrices[pos.market] || pos.entryPrice;
@@ -834,9 +861,13 @@ async function sellAllPositions() {
 async function syncPositionsWithUpbit() {
   try {
     const holdings = await upbit.getHoldings(config.upbit.accessKey, config.upbit.secretKey);
-    const balance = await upbit.getBalance(config.upbit.accessKey, config.upbit.secretKey);
+    const accounts = await upbit.getAccounts(config.upbit.accessKey, config.upbit.secretKey);
+    const krwAcc = accounts.find(a => a.currency === 'KRW');
+    const krwTotal = krwAcc ? parseFloat(krwAcc.balance) + parseFloat(krwAcc.locked || 0) : 0;
+    const krwAvail = krwAcc ? parseFloat(krwAcc.balance) : 0;
+    const krwLocked = krwAcc ? parseFloat(krwAcc.locked || 0) : 0;
 
-    log(`업비트 잔고 동기화: KRW ${Math.round(balance).toLocaleString()}원, 보유코인 ${holdings.length}개`);
+    log(`업비트 잔고 동기화: KRW ${Math.round(krwTotal).toLocaleString()}원 (주문가능 ${Math.round(krwAvail).toLocaleString()}원, 주문대기 ${Math.round(krwLocked).toLocaleString()}원), 보유코인 ${holdings.length}개`);
 
     // state에 있는데 실제로 없는 포지션 정리
     const holdingCoins = holdings.map(h => h.currency);
@@ -907,12 +938,13 @@ app.get('/api/balance', async (req, res) => {
   try {
     const accounts = await upbit.getAccounts(config.upbit.accessKey, config.upbit.secretKey);
     const krw = accounts.find(a => a.currency === 'KRW');
+    const hideCoins = ['ETC', 'DAWN', 'CTC']; // 장기 보유 — 대시보드에서 숨김
     const holdings = accounts
-      .filter(a => a.currency !== 'KRW' && parseFloat(a.balance) > 0)
+      .filter(a => a.currency !== 'KRW' && (parseFloat(a.balance) > 0 || parseFloat(a.locked) > 0) && !hideCoins.includes(a.currency))
       .map(a => {
         const market = `KRW-${a.currency}`;
         const currentPrice = latestPrices[market] || parseFloat(a.avg_buy_price);
-        const balance = parseFloat(a.balance);
+        const balance = parseFloat(a.balance) + parseFloat(a.locked || 0);
         const avgPrice = parseFloat(a.avg_buy_price);
         const evalAmount = currentPrice * balance;
         const buyAmount = avgPrice * balance;
@@ -926,12 +958,20 @@ app.get('/api/balance', async (req, res) => {
           pnlPct: avgPrice > 0 ? +((currentPrice - avgPrice) / avgPrice * 100).toFixed(2) : 0,
         };
       });
-    const krwBalance = krw ? parseFloat(krw.balance) : 0;
+    const krwAvailable = krw ? parseFloat(krw.balance) : 0;
+    const krwLocked = krw ? parseFloat(krw.locked || 0) : 0;
+    const krwTotal = krwAvailable + krwLocked;
     const totalEval = holdings.reduce((s, h) => s + h.evalAmount, 0);
     res.json({
-      krw: Math.round(krwBalance),
-      totalAsset: Math.round(krwBalance + totalEval),
+      krw: Math.round(krwTotal),
+      krwAvailable: Math.round(krwAvailable),
+      krwLocked: Math.round(krwLocked),
+      totalAsset: Math.round(krwTotal + totalEval),
       holdings,
+      pendingOrders: Object.entries(pendingBuyOrders).map(([coin, p]) => ({
+        coin, market: p.market, price: p.limitPrice,
+        amount: p.amount, placedAt: p.placedAt,
+      })),
     });
   } catch (e) {
     res.status(500).json({ error: e.message });
@@ -1002,6 +1042,13 @@ const server = app.listen(PORT, async () => {
   // 업비트 잔고 동기화
   await syncPositionsWithUpbit();
 
+  // 서버 시작 시 미체결 주문 복구 확인
+  const pendingKeys = Object.keys(pendingBuyOrders);
+  if (pendingKeys.length > 0) {
+    log(`📋 미체결 매수 주문 ${pendingKeys.length}개 복구: ${pendingKeys.join(', ')}`, 'info');
+    await checkPendingBuyOrders(); // 즉시 상태 확인
+  }
+
   if (config.autoTrading) {
     // 초기 스캔
     await scanTopCoins();
@@ -1018,6 +1065,9 @@ const server = app.listen(PORT, async () => {
 
   // 10초마다 미체결 매수 주문 체결 확인 + 5분 타임아웃
   setInterval(() => { if (config.autoTrading) checkPendingBuyOrders(); }, 10000);
+
+  // 30초마다 state 자동 저장 (highSinceEntry 등 실시간 변경분)
+  setInterval(() => { saveState(state); }, 30000);
 });
 
 // WebSocket 서버

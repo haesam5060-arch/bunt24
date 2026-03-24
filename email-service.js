@@ -45,8 +45,8 @@ async function sendBuyAlert(position) {
 
   const html = `
   <div style="font-family:-apple-system,sans-serif;max-width:500px;margin:0 auto;background:#0d1117;color:#e6edf3;border-radius:12px;overflow:hidden;">
-    <div style="background:#238636;padding:16px 20px;text-align:center;">
-      <h2 style="margin:0;color:#fff;font-size:18px;">🟢 매수 체결</h2>
+    <div style="background:#b08800;padding:16px 20px;text-align:center;">
+      <h2 style="margin:0;color:#fff;font-size:18px;">🟡 매수 체결</h2>
     </div>
     <div style="padding:20px;">
       <div style="text-align:center;margin-bottom:16px;">
@@ -65,7 +65,7 @@ async function sendBuyAlert(position) {
     </div>
   </div>`;
 
-  await send(`🟢 ${position.coin} 매수 | ${position.entryPrice.toLocaleString()}원 × ${position.amount.toLocaleString()}원`, html);
+  await send(`[코인] 🟡 ${position.coin} 매수 | ${position.entryPrice.toLocaleString()}원 × ${position.amount.toLocaleString()}원`, html);
 }
 
 // ── 매도 알림 ─────────────────────────────────────
@@ -103,7 +103,7 @@ async function sendSellAlert(trade) {
     </div>
   </div>`;
 
-  await send(`${icon} ${trade.coin} ${reasonText} | ${trade.pnlPct > 0 ? '+' : ''}${trade.pnlPct}% (${trade.pnl > 0 ? '+' : ''}${trade.pnl.toLocaleString()}원)`, html);
+  await send(`[코인] ${icon} ${trade.coin} ${reasonText} | ${trade.pnlPct > 0 ? '+' : ''}${trade.pnlPct}% (${trade.pnl > 0 ? '+' : ''}${trade.pnl.toLocaleString()}원)`, html);
 }
 
 module.exports = { init, isReady, send, sendBuyAlert, sendSellAlert };

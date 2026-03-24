@@ -19,26 +19,27 @@
   .container { max-width: 1280px; margin: 0 auto; padding: 16px; }
 
   /* ── 메인 PnL 히어로 ── */
-  .hero { background: linear-gradient(135deg, #161b22, #1c2333); border: 1px solid #30363d; border-radius: 16px; padding: 24px; margin-bottom: 16px; display: grid; grid-template-columns: 1fr 1px 1fr 1px 1fr; gap: 0; align-items: center; }
-  .hero-divider { background: #30363d; height: 60px; }
+  .hero { background: linear-gradient(135deg, #161b22, #1c2333); border: 1px solid #3a424d; border-radius: 16px; padding: 28px 24px; margin-bottom: 16px; display: grid; grid-template-columns: 1fr 1px 1fr 1px 1fr; gap: 0; align-items: center; }
+  .hero-divider { background: #3a424d; height: 60px; }
   .hero-item { text-align: center; }
-  .hero-label { font-size: 12px; color: #8b949e; margin-bottom: 6px; letter-spacing: 0.5px; }
-  .hero-value { font-size: 32px; font-weight: 800; }
-  .hero-sub { font-size: 13px; color: #8b949e; margin-top: 4px; }
+  .hero-label { font-size: 11px; color: #a0a9b5; margin-bottom: 8px; letter-spacing: 1px; text-transform: uppercase; font-weight: 600; }
+  .hero-value { font-size: 22px; font-weight: 800; }
+  .hero-value.main { font-size: 38px; }
+  .hero-sub { font-size: 13px; color: #a0a9b5; margin-top: 6px; }
   .green { color: #3fb950; }
   .red { color: #f85149; }
   .yellow { color: #d29922; }
   .white { color: #e6edf3; }
 
   /* ── 미니 카드 그리드 ── */
-  .mini-cards { display: grid; grid-template-columns: repeat(6, 1fr); gap: 10px; margin-bottom: 16px; }
-  .mini-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 12px 14px; }
-  .mini-card .label { font-size: 10px; color: #8b949e; text-transform: uppercase; letter-spacing: 0.5px; }
-  .mini-card .val { font-size: 18px; font-weight: 700; margin-top: 2px; }
+  .mini-cards { display: grid; grid-template-columns: repeat(5, 1fr); gap: 12px; margin-bottom: 16px; }
+  .mini-card { background: #161b22; border: 1px solid #30363d; border-radius: 10px; padding: 14px 16px; }
+  .mini-card .label { font-size: 10px; color: #a0a9b5; text-transform: uppercase; letter-spacing: 0.5px; font-weight: 500; }
+  .mini-card .val { font-size: 18px; font-weight: 700; margin-top: 4px; }
 
   /* ── 버튼 ── */
-  .btn-row { display: flex; gap: 8px; margin-bottom: 16px; flex-wrap: wrap; }
-  .btn { padding: 8px 16px; border: 1px solid #30363d; border-radius: 8px; background: #21262d; color: #e6edf3; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s; }
+  .btn-row { display: flex; gap: 10px; margin-bottom: 16px; flex-wrap: wrap; }
+  .btn { padding: 10px 20px; min-height: 44px; border: 1px solid #30363d; border-radius: 8px; background: #21262d; color: #e6edf3; cursor: pointer; font-size: 13px; font-weight: 500; transition: all 0.15s; }
   .btn:hover { background: #30363d; }
   .btn.on { background: #238636; border-color: #238636; }
   .btn.on:hover { background: #2ea043; }
@@ -49,19 +50,19 @@
   .grid-2 { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; margin-bottom: 16px; }
 
   /* ── 섹션 ── */
-  .section { background: #161b22; border: 1px solid #30363d; border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
-  .sec-head { padding: 10px 14px; font-size: 13px; font-weight: 600; border-bottom: 1px solid #30363d; display: flex; justify-content: space-between; align-items: center; }
+  .section { background: #161b22; border: 1px solid #3a424d; border-radius: 12px; margin-bottom: 16px; overflow: hidden; }
+  .sec-head { padding: 12px 16px; font-size: 13px; font-weight: 600; border-bottom: 1px solid #3a424d; display: flex; justify-content: space-between; align-items: center; }
   .sec-head .cnt { background: #30363d; padding: 2px 8px; border-radius: 10px; font-size: 11px; }
 
   /* ── 테이블 ── */
   table { width: 100%; border-collapse: collapse; font-size: 12px; }
-  th { text-align: left; padding: 6px 10px; color: #8b949e; font-weight: 500; border-bottom: 1px solid #30363d; font-size: 10px; text-transform: uppercase; }
-  td { padding: 7px 10px; border-bottom: 1px solid #21262d; }
+  th { text-align: left; padding: 8px 12px; color: #a0a9b5; font-weight: 500; border-bottom: 1px solid #30363d; font-size: 10px; text-transform: uppercase; }
+  td { padding: 10px 12px; border-bottom: 1px solid #21262d; }
   tr:hover { background: #1c2128; }
 
   /* ── 포지션 카드 ── */
-  .pos-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(220px, 1fr)); gap: 10px; padding: 12px; }
-  .pos-card { background: #0d1117; border: 1px solid #30363d; border-radius: 10px; padding: 12px; }
+  .pos-cards { display: grid; grid-template-columns: repeat(auto-fill, minmax(240px, 1fr)); gap: 12px; padding: 14px; }
+  .pos-card { background: #0d1117; border: 1px solid #30363d; border-radius: 10px; padding: 14px; }
   .pos-card.profit { border-color: #23863660; }
   .pos-card.loss { border-color: #da363460; }
   .pos-coin { font-size: 16px; font-weight: 700; margin-bottom: 6px; }
@@ -76,15 +77,15 @@
   .ob-badge { display: inline-block; padding: 2px 6px; border-radius: 4px; font-size: 10px; font-weight: 600; background: #23863620; color: #3fb950; border: 1px solid #23863640; margin: 1px; }
 
   /* ── 로그 ── */
-  .log-area { max-height: 250px; overflow-y: auto; padding: 6px; }
-  .log-line { padding: 3px 8px; font-size: 11px; font-family: 'SF Mono', 'Menlo', monospace; border-bottom: 1px solid #21262d; line-height: 1.5; }
+  .log-area { max-height: 300px; overflow-y: auto; padding: 8px; }
+  .log-line { padding: 5px 10px; font-size: 11px; font-family: 'SF Mono', 'Menlo', monospace; border-bottom: 1px solid #21262d; line-height: 1.7; }
   .log-line .t { color: #8b949e; margin-right: 6px; }
   .log-line.error { color: #f85149; }
   .log-line.warn { color: #d29922; }
   .log-line.trade { color: #3fb950; }
 
   /* ── 일별 바 차트 ── */
-  .daily-bar { display: flex; align-items: center; gap: 8px; padding: 4px 10px; border-bottom: 1px solid #21262d; font-size: 12px; }
+  .daily-bar { display: flex; align-items: center; gap: 10px; padding: 6px 12px; border-bottom: 1px solid #21262d; font-size: 12px; }
   .daily-bar .date { width: 80px; color: #8b949e; }
   .daily-bar .trades { width: 40px; color: #8b949e; text-align: center; }
   .daily-bar .bar-wrap { flex: 1; height: 18px; position: relative; }
@@ -95,12 +96,19 @@
 
   .empty-msg { text-align: center; color: #8b949e; padding: 24px; font-size: 13px; }
 
+  @media (max-width: 1024px) {
+    .mini-cards { grid-template-columns: repeat(3, 1fr); }
+    .grid-2 { grid-template-columns: 1fr; }
+    .hero { padding: 20px 16px; }
+    .hero-value.main { font-size: 30px; }
+  }
   @media (max-width: 768px) {
     .hero { grid-template-columns: 1fr; gap: 16px; }
     .hero-divider { display: none; }
-    .mini-cards { grid-template-columns: repeat(3, 1fr); }
-    .grid-2 { grid-template-columns: 1fr; }
-    .hero-value { font-size: 24px; }
+    .mini-cards { grid-template-columns: repeat(2, 1fr); }
+    .hero-value { font-size: 20px; }
+    .hero-value.main { font-size: 28px; }
+    .btn { width: 100%; justify-content: center; text-align: center; }
   }
 </style>
 </head>
@@ -117,44 +125,47 @@
 
 <div class="container">
 
-  <!-- 메인 히어로: 핵심 수익 지표 -->
-  <div class="hero">
+  <!-- 메인 히어로: 투자 현황 -->
+  <div class="hero" style="grid-template-columns: 1fr 1px 1.5fr 1px 1fr 1px 1fr;">
     <div class="hero-item">
-      <div class="hero-label">오늘 수익</div>
-      <div class="hero-value" id="todayPnl">0원</div>
-      <div class="hero-sub" id="todayTrades">0건 거래</div>
+      <div class="hero-label">투자 원금</div>
+      <div class="hero-value white" id="initCapital">100,000원</div>
+      <div class="hero-sub" id="startDate">-</div>
     </div>
     <div class="hero-divider"></div>
     <div class="hero-item">
-      <div class="hero-label">누적 수익</div>
-      <div class="hero-value" id="totalPnl">0원</div>
+      <div class="hero-label">현재 가치</div>
+      <div class="hero-value main" id="currentValue">-</div>
       <div class="hero-sub" id="totalReturn">수익률 0%</div>
     </div>
     <div class="hero-divider"></div>
     <div class="hero-item">
-      <div class="hero-label">업비트 잔고</div>
-      <div class="hero-value white" id="realBalance">-</div>
-      <div class="hero-sub" id="realTotal">총 자산 -</div>
+      <div class="hero-label">누적 손익</div>
+      <div class="hero-value" id="totalPnl">0원</div>
+      <div class="hero-sub" id="totalWinRate">승률 0%</div>
+    </div>
+    <div class="hero-divider"></div>
+    <div class="hero-item">
+      <div class="hero-label">오늘 수익</div>
+      <div class="hero-value" id="todayPnl">0원</div>
+      <div class="hero-sub" id="todayTrades">0건 거래</div>
     </div>
   </div>
 
   <!-- 미니 카드 -->
   <div class="mini-cards">
     <div class="mini-card">
-      <div class="label">승률</div>
-      <div class="val" id="winRate">0%</div>
+      <div class="label">보유 원화</div>
+      <div class="val" id="realBalance" style="color:#d29922">-</div>
+      <div style="font-size:10px;color:#8b949e;margin-top:2px"><span id="krwAvail">-</span> 가용 / <span id="krwLocked">-</span> 주문중</div>
     </div>
     <div class="mini-card">
-      <div class="label">승/패</div>
-      <div class="val" id="winLoss">0/0</div>
+      <div class="label">보유 포지션 / 대기</div>
+      <div class="val"><span id="posCount">0</span> <span style="font-size:13px;color:#d29922">+ <span id="pendingCount">0</span>대기</span></div>
     </div>
     <div class="mini-card">
-      <div class="label">총 거래</div>
-      <div class="val" id="totalTrades">0</div>
-    </div>
-    <div class="mini-card">
-      <div class="label">보유 포지션</div>
-      <div class="val" id="posCount">0</div>
+      <div class="label">승/패 (총 거래)</div>
+      <div class="val"><span id="winLoss">0/0</span> <span style="font-size:13px;color:#8b949e">(<span id="totalTrades">0</span>)</span></div>
     </div>
     <div class="mini-card">
       <div class="label">감시 코인</div>
@@ -180,6 +191,15 @@
     <div id="posArea" class="pos-cards">
       <div class="empty-msg">대기 중 — OB 터치 시 자동 매수</div>
     </div>
+  </div>
+
+  <!-- 대기 주문 (지정가 매수 대기) -->
+  <div class="section" id="pendingSection" style="display:none">
+    <div class="sec-head" style="border-left:3px solid #d29922">📋 지정가 매수 대기 <span class="cnt" id="pendingBadge">0</span></div>
+    <table>
+      <thead><tr><th>코인</th><th>주문가격</th><th>금액</th><th>TP목표</th><th>SL손절</th><th>대기시간</th></tr></thead>
+      <tbody id="pendingTable"></tbody>
+    </table>
   </div>
 
   <!-- 매매 내역 -->
@@ -323,6 +343,26 @@ function updateState(s) {
     cb.style.display = 'none';
   }
 
+  // 투자 원금 & 시작일
+  const initCap = 100000;
+  const dailyArr = (s.dailyPnl || []).sort((a, b) => a.date.localeCompare(b.date));
+  const startDateStr = dailyArr.length > 0 ? dailyArr[0].date : '-';
+  document.getElementById('startDate').textContent = startDateStr !== '-' ? `${startDateStr} 시작` : '';
+
+  // 현재 가치 = 원금 + 누적손익
+  const currentVal = initCap + (s.totalPnl || 0);
+  const cvEl = document.getElementById('currentValue');
+  cvEl.textContent = fmt(currentVal) + '원';
+  cvEl.className = 'hero-value ' + (currentVal >= initCap ? 'green' : 'red');
+  const retPct = ((currentVal - initCap) / initCap * 100).toFixed(2);
+  document.getElementById('totalReturn').textContent = `${retPct > 0 ? '+' : ''}${retPct}%`;
+
+  // 누적 손익
+  const tpEl = document.getElementById('totalPnl');
+  tpEl.textContent = (s.totalPnl > 0 ? '+' : '') + fmt(s.totalPnl) + '원';
+  tpEl.className = 'hero-value ' + (s.totalPnl >= 0 ? 'green' : 'red');
+  document.getElementById('totalWinRate').textContent = `승률 ${s.winRate}% (${s.totalTrades}건)`;
+
   // 오늘 수익
   const today = new Date().toISOString().slice(0, 10);
   const todayData = (s.dailyPnl || []).find(d => d.date === today);
@@ -332,19 +372,11 @@ function updateState(s) {
   todayEl.className = 'hero-value ' + (todayPnlVal >= 0 ? 'green' : 'red');
   document.getElementById('todayTrades').textContent = (todayData ? todayData.trades : 0) + '건 거래';
 
-  // 누적 수익
-  const tpEl = document.getElementById('totalPnl');
-  tpEl.textContent = (s.totalPnl > 0 ? '+' : '') + fmt(s.totalPnl) + '원';
-  tpEl.className = 'hero-value ' + (s.totalPnl >= 0 ? 'green' : 'red');
-  const initCap = 100000;
-  const retPct = initCap > 0 ? (s.totalPnl / initCap * 100).toFixed(2) : 0;
-  document.getElementById('totalReturn').textContent = `수익률 ${retPct > 0 ? '+' : ''}${retPct}%`;
-
   // 미니 카드
-  document.getElementById('winRate').textContent = s.winRate + '%';
   document.getElementById('winLoss').textContent = `${s.wins}/${s.losses}`;
   document.getElementById('totalTrades').textContent = s.totalTrades;
   document.getElementById('posCount').textContent = s.positions.length;
+  document.getElementById('pendingCount').textContent = (s.pendingOrders || []).length;
   document.getElementById('watchCount').textContent = s.watchlist.length;
   const obTotal = Object.values(s.activeOBs || {}).reduce((sum, arr) => sum + arr.length, 0);
   document.getElementById('obCount').textContent = obTotal;
@@ -418,6 +450,30 @@ function updateState(s) {
       <td>${obHtml}</td>
     </tr>`;
   }).join('');
+
+  // 대기 주문 렌더링
+  const pending = s.pendingOrders || [];
+  const pendingSec = document.getElementById('pendingSection');
+  const pendingTb = document.getElementById('pendingTable');
+  document.getElementById('pendingBadge').textContent = pending.length;
+  if (pending.length === 0) {
+    pendingSec.style.display = 'none';
+  } else {
+    pendingSec.style.display = 'block';
+    pendingTb.innerHTML = pending.map(p => {
+      const elapsed = p.elapsed || 0;
+      const min = Math.floor(elapsed / 60);
+      const sec = elapsed % 60;
+      return `<tr>
+        <td><strong style="color:#d29922">${p.coin}</strong></td>
+        <td>${fmt(p.limitPrice)}원</td>
+        <td>${fmt(p.amount)}원</td>
+        <td class="green">${fmt(p.tpPrice)}원</td>
+        <td class="red">${fmt(p.slPrice)}원</td>
+        <td>${min}분 ${sec}초</td>
+      </tr>`;
+    }).join('');
+  }
 }
 
 const latestPrices = {};
@@ -437,7 +493,8 @@ async function loadBalance() {
     const b = await res.json();
     if (b.error) return;
     document.getElementById('realBalance').textContent = fmt(b.krw) + '원';
-    document.getElementById('realTotal').textContent = '총 자산 ' + fmt(b.totalAsset) + '원';
+    document.getElementById('krwAvail').textContent = fmt(b.krwAvailable || 0) + '원';
+    document.getElementById('krwLocked').textContent = fmt(b.krwLocked || 0) + '원';
     const ht = document.getElementById('holdingsTable');
     if (b.holdings.length === 0) {
       ht.innerHTML = '<tr><td colspan="4" class="empty-msg">보유 코인 없음</td></tr>';

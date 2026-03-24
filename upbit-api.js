@@ -197,7 +197,7 @@ async function getTopMarkets(limit = 20) {
   const tickers = await publicGet('/v1/ticker?markets=' + krwMarkets.join(','));
   tickers.sort((a, b) => b.acc_trade_price_24h - a.acc_trade_price_24h);
 
-  return tickers.slice(0, limit).map(t => ({
+  return tickers.slice(0, limit || tickers.length).map(t => ({
     market: t.market,
     coin: t.market.replace('KRW-', ''),
     price: t.trade_price,
