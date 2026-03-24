@@ -3,7 +3,7 @@
 <head>
 <meta charset="UTF-8">
 <meta name="viewport" content="width=device-width, initial-scale=1.0">
-<title>24번트 — 코인 스캘핑 봇</title>
+<title>24번트 v2 — 멀티전략 코인 스캘핑 봇</title>
 <style>
   * { margin: 0; padding: 0; box-sizing: border-box; }
   body { font-family: -apple-system, 'Pretendard', sans-serif; background: #0d1117; color: #e6edf3; min-height: 100vh; }
@@ -172,7 +172,7 @@
       <div class="val" id="watchCount">0</div>
     </div>
     <div class="mini-card">
-      <div class="label">활성 OB</div>
+      <div class="label">활성 시그널</div>
       <div class="val" id="obCount">0</div>
     </div>
   </div>
@@ -246,7 +246,7 @@
       <div class="sec-head">감시 코인 & 오더블록 <span class="cnt" id="watchBadge">0</span></div>
       <div style="max-height:400px; overflow-y:auto;">
       <table>
-        <thead><tr><th>코인</th><th>현재가</th><th>거래대금</th><th>활성 OB</th></tr></thead>
+        <thead><tr><th>코인</th><th>현재가</th><th>거래대금</th><th>시그널/OB</th></tr></thead>
         <tbody id="watchTable"></tbody>
       </table>
       </div>
@@ -393,14 +393,15 @@ function updateState(s) {
   document.getElementById('posCount').textContent = s.positions.length;
   document.getElementById('pendingCount').textContent = (s.pendingOrders || []).length;
   document.getElementById('watchCount').textContent = s.watchlist.length;
+  const signalCount = (s.activeSignals || []).length;
   const obTotal = Object.values(s.activeOBs || {}).reduce((sum, arr) => sum + arr.length, 0);
-  document.getElementById('obCount').textContent = obTotal;
+  document.getElementById('obCount').textContent = signalCount > 0 ? `${signalCount}🎯` : obTotal;
 
   // 포지션 카드
   const posArea = document.getElementById('posArea');
   document.getElementById('posBadge').textContent = s.positions.length;
   if (s.positions.length === 0) {
-    posArea.innerHTML = '<div class="empty-msg">대기 중 — OB 터치 시 자동 매수</div>';
+    posArea.innerHTML = '<div class="empty-msg">대기 중 — v2 멀티전략 스코어링 매수 대기</div>';
   } else {
     posArea.innerHTML = s.positions.map(p => {
       const holdMin = Math.round((Date.now() - new Date(p.entryTime).getTime()) / 60000);
@@ -421,7 +422,7 @@ function updateState(s) {
         <div class="pos-detail">
           진입 ${fmt(p.entryPrice)} → 현재 ${fmt(p.currentPrice || p.entryPrice)}<br>
           TP <span class="green">${fmt(p.tpPrice)}</span> | SL <span class="red">${fmt(p.slPrice)}</span><br>
-          투자 ${fmt(p.amount)}원 | ${holdMin}분 보유
+          투자 ${fmt(p.amount)}원 | ${holdMin}분 보유${p.strategies ? `<br><span style="color:#a371f7;font-size:11px">🎯 ${p.strategies} (score:${p.signalScore || '-'})</span>` : ''}
         </div>
         <div class="pos-bar"><div class="pos-bar-fill ${barCls}" style="width:${pct}%"></div></div>
       </div>`;
@@ -451,18 +452,26 @@ function updateState(s) {
   // 감시 테이블
   const wt = document.getElementById('watchTable');
   document.getElementById('watchBadge').textContent = s.watchlist.length;
+  const signals = {};
+  (s.activeSignals || []).forEach(sig => { signals[sig.coin] = sig; });
   wt.innerHTML = (s.watchlist || []).map(w => {
+    const sig = signals[w.coin];
     const obs = (s.activeOBs || {})[w.coin] || [];
-    const obHtml = obs.length > 0
-      ? obs.slice(0, 5).map(o => `<span class="ob-badge">${fmt(o.bottom)}~${fmt(o.top)}</span>`).join(' ') + (obs.length > 5 ? ` <span style="color:#8b949e;font-size:10px">+${obs.length-5}</span>` : '')
-      : '<span style="color:#484f58">-</span>';
+    let sigHtml;
+    if (sig) {
+      sigHtml = `<span style="background:#a371f720;color:#a371f7;padding:2px 8px;border-radius:6px;font-size:11px;font-weight:600;">🎯 ${sig.score}점 [${sig.strategies.join('+')}]</span>`;
+    } else if (obs.length > 0) {
+      sigHtml = obs.slice(0, 3).map(o => `<span class="ob-badge">${fmt(o.bottom)}~${fmt(o.top)}</span>`).join(' ');
+    } else {
+      sigHtml = '<span style="color:#484f58">-</span>';
+    }
     const vol = (w.volume24h / 1e8).toFixed(0);
     const cp = latestPrices[w.market];
     return `<tr>
       <td><strong>${w.coin}</strong></td>
       <td>${fmt(cp || w.price)}</td>
       <td>${vol}억</td>
-      <td>${obHtml}</td>
+      <td>${sigHtml}</td>
     </tr>`;
   }).join('');
 

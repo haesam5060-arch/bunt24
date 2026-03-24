@@ -1,12 +1,18 @@
 /**
- * 24번트 — 업비트 오더블록 스캘핑 자동매매 봇
+ * 24번트 v2 — 멀티 전략 스코어링 자동매매 봇
  *
  * 구조:
- *   1) 1시간마다 거래대금 상위 30개 코인 선별
- *   2) 1분마다 각 코인 1분봉 캔들 수집 → OB 감지
- *   3) WebSocket 실시간 가격 → OB 터치 시 매수
- *   4) 포지션 감시 → TP/SL/트레일링 도달 시 매도
+ *   1) 15분마다 거래대금 상위 코인 선별 (적합성 점수)
+ *   2) 5분마다 각 코인 캔들 수집 → 지표 계산 + OB 감지
+ *   3) WebSocket 실시간 가격 → 5개 전략 스코어 합산 → 매수
+ *   4) 포지션 감시 → ATR 기반 동적 SL/TP/트레일링 → 매도
  *   5) 대시보드로 실시간 모니터링
+ *
+ * v2 변경점:
+ *   - OB-only → 멀티 전략 스코어링 (RSI, BB, 변동성돌파, EMA, OB)
+ *   - 고정 SL → ATR 기반 동적 SL/TP
+ *   - 단일 전략 의존 → 최소 2개 전략 확인 필수
+ *   - 변동성 기반 포지션 사이징
  */
 
 const express = require('express');
@@ -15,6 +21,7 @@ const fs = require('fs');
 const WebSocket = require('ws');
 const upbit = require('./upbit-api');
 const ob = require('./ob-engine');
+const stratEngine = require('./strategy-engine');
 const emailService = require('./email-service');
 
 // ── 설정 로드 ─────────────────────────────────────
@@ -77,6 +84,10 @@ let cooldownUntil = 0; // 자동매매 일시 중지 해제 시각
 
 // ── 코인별 재진입 쿨다운 (cooldownCandles 구현) ──
 const coinCooldowns = {}; // { coin: cooldownExpiresAt (timestamp) }
+
+// ── v2: 코인별 지표 캐시 ──
+const indicatorsCache = {}; // { coin: { ind, candles, updatedAt } }
+const signalCache = {};     // { coin: { signal, updatedAt } }
 
 // ── 로깅 ──────────────────────────────────────────
 const logs = [];
@@ -247,10 +258,10 @@ async function scanTopCoins() {
   }
 }
 
-// ── OB 업데이트 (1분마다) ─────────────────────────
+// ── OB + 지표 업데이트 (5분마다) ─────────────────
 async function updateAllOBs() {
   const strat = config.strategy;
-  const candleMinute = strat.candleMinute || 1;
+  const candleMinute = strat.candleMinute || 5;
 
   for (const item of state.watchlist) {
     try {
@@ -258,9 +269,8 @@ async function updateAllOBs() {
       const candles = ob.normalizeCandles(rawCandles);
       if (candles.length < 50) continue;
 
+      // OB 감지
       const obs = ob.detectOrderBlocks(candles, strat);
-
-      // 시간 기반 유효기간 필터 (obMaxAge × candleMinute분)
       const now = new Date();
       const maxAgeMs = (strat.obMaxAge || 24) * candleMinute * 60 * 1000;
       const activeOBs = obs
@@ -273,17 +283,39 @@ async function updateAllOBs() {
 
       state.orderBlocks[item.coin] = activeOBs;
 
-      // 최근 5봉 저장 (연속 하락 캔들 필터용)
+      // v2: 지표 계산 + 캐시
+      const ind = stratEngine.computeIndicators(candles);
+      indicatorsCache[item.coin] = { ind, candles, updatedAt: Date.now() };
+
+      // 최근 봉 저장 (하위 호환)
       if (!state.recentCandles) state.recentCandles = {};
       state.recentCandles[item.coin] = candles.slice(-5);
 
-      if (activeOBs.length > 0) {
-        log(`${item.coin}: ${activeOBs.length}개 OB 활성 (최근: ${activeOBs[activeOBs.length - 1].top.toLocaleString()}~${activeOBs[activeOBs.length - 1].bottom.toLocaleString()}원)`);
+      // v2: 시그널 미리 계산 (마지막 봉 기준)
+      const v2 = strat.v2 || {};
+      const signal = stratEngine.generateSignal(ind, candles.length - 1, candles, activeOBs, {
+        minScore: v2.minScore || 20,
+        atrSlMultiplier: v2.atrSlMultiplier || 1.5,
+        rrRatio: v2.rrRatio || 1.5,
+        volatilityK: v2.volatilityK || 0.5,
+        maxAtrSlPct: v2.maxAtrSlPct || 3.0,
+        minAtrSlPct: v2.minAtrSlPct || 0.5,
+      });
+
+      signalCache[item.coin] = { signal, updatedAt: Date.now() };
+
+      if (signal) {
+        const stratNames = signal.strategies.map(s => s.name).join('+');
+        log(`🎯 ${item.coin}: 시그널 score=${signal.score} [${stratNames}] SL=${signal.slPct}% TP=${signal.tpPct}%`);
+      }
+
+      if (activeOBs.length > 0 && !signal) {
+        log(`${item.coin}: ${activeOBs.length}개 OB 활성 (시그널 미달)`);
       }
 
       await sleep(200);
     } catch (e) {
-      log(`${item.coin} OB 업데이트 에러: ${e.message}`, 'error');
+      log(`${item.coin} 업데이트 에러: ${e.message}`, 'error');
     }
   }
 
@@ -350,144 +382,102 @@ async function check1HTrend(market) {
   }
 }
 
-// ── 진입 시그널 체크 (실시간) ─────────────────────
-// 지정가 매수: OB 하단 가격으로 주문 → 체결 대기 → 5분 미체결 시 취소
+// ── v2: 멀티 전략 진입 시그널 체크 (실시간) ─────────
 async function checkEntrySignal(market, price) {
   const coin = market.replace('KRW-', '');
   const strat = config.strategy;
+  const v2 = strat.v2 || {};
 
   // 연속 손절 쿨다운 체크
   if (cooldownUntil > 0) {
-    if (Date.now() < cooldownUntil) return; // 아직 쿨다운 중
-    // 쿨다운 해제
+    if (Date.now() < cooldownUntil) return;
     log(`🔄 쿨다운 해제 → 자동매매 재시작 (연속 손절 카운터 초기화)`, 'info');
     consecutiveLosses = 0;
     cooldownUntil = 0;
   }
 
-  // 제외 코인 필터
+  // 기본 필터
   if (strat.excludeCoins && strat.excludeCoins.includes(coin)) return;
-
-  // 최소 가격 필터 (호가 단위 문제 방지)
   if (strat.minCoinPrice && price < strat.minCoinPrice) return;
 
-  // 시간대 필터
-  if (strat.excludeHours && strat.excludeHours.length > 0) {
-    const hour = new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', hour12: false });
-    if (strat.excludeHours.includes(parseInt(hour))) return;
-  }
+  // 시간대 필터 (v2: 새벽 3~7시 비활성)
+  const kstHour = parseInt(new Date().toLocaleString('ko-KR', { timeZone: 'Asia/Seoul', hour: 'numeric', hour12: false }));
+  if (!stratEngine.isGoodTradingHour(kstHour)) return;
+  if (strat.excludeHours && strat.excludeHours.includes(kstHour)) return;
 
-  // 최대 포지션 수 + 대기 주문 합산 체크
+  // 최대 포지션 수 체크
   const pendingCount = Object.keys(pendingBuyOrders).length;
   if (state.positions.length + pendingCount >= strat.maxPositions) return;
-
-  // 같은 코인 이미 보유 or 대기 중이면 스킵
   if (state.positions.some(p => p.coin === coin)) return;
   if (pendingBuyOrders[coin]) return;
 
-  // 코인별 재진입 쿨다운 체크
+  // 쿨다운 체크
   if (coinCooldowns[coin] && Date.now() < coinCooldowns[coin]) return;
-
-  // 동시 실행 방지
   if (entryLocks.has(coin)) return;
 
-  // 활성 OB 확인 + 실시간 broken 체크
-  const activeOBs = state.orderBlocks[coin];
-  if (!activeOBs || activeOBs.length === 0) return;
+  // v2: 캐시된 시그널 확인 (5분 이내 유효)
+  const cached = signalCache[coin];
+  if (!cached || !cached.signal) return;
+  if (Date.now() - cached.updatedAt > 5 * 60 * 1000) return; // 5분 초과 시그널 무시
 
-  // 실시간 가격으로 OB broken 업데이트
-  for (const o of activeOBs) {
-    if (!o.used && !o.broken && price < o.bottom * (1 - (strat.slPct || 0.8) / 100)) {
-      o.broken = true;
-    }
-  }
-
-  // OB 터치 확인
-  const touchedOB = ob.checkOBTouch(activeOBs.filter(o => !o.broken && !o.used), price);
-  if (!touchedOB) return;
-
-  // 연속 하락 캔들 필터 — 백테스트 최적값 2봉 (config에서 조정 가능)
-  const bearishFilter = strat.bearishFilter || 2;
-  const recentCandles = state.recentCandles?.[coin];
-  if (recentCandles && recentCandles.length >= bearishFilter) {
-    const lastN = recentCandles.slice(-bearishFilter);
-    const allBearish = lastN.every(c => c.close < c.open);
-    if (allBearish) {
-      log(`${coin} OB 터치했으나 직전 ${bearishFilter}봉 연속 음봉 → 하락추세 스킵`, 'warn');
-      return;
-    }
-  }
+  const signal = cached.signal;
 
   // 락 설정
   entryLocks.add(coin);
 
   try {
-    // 추세 필터 (설정으로 ON/OFF)
-    if (strat.useTrendFilter) {
-      const trendOk = await check1HTrend(market);
-      if (!trendOk) {
-        log(`${coin} OB 터치했으나 1H 하락추세 — 스킵`, 'warn');
-        return;
-      }
-    }
-
-    // 지정가 매수 가격 = 스캔 시점 현재가 -1% (호가 단위 내림)
-    const buyDiscount = strat.buyDiscountPct || 1.0;
+    // v2: 시그널의 SL/TP 사용 (ATR 기반 동적)
+    const buyDiscount = v2.buyDiscountPct || strat.buyDiscountPct || 0.5;
     const rawLimitPrice = price * (1 - buyDiscount / 100);
     const limitPrice = upbit.roundToTick(rawLimitPrice, 'down');
 
-    // TP = minTpPct 기준 고정 (swing high 참고하되 상한 제한)
-    const minTpPct = strat.minTpPct || 2.0;
-    const maxTpPct = minTpPct * 1.5; // TP 상한 = minTpPct의 1.5배 (예: 2.4% → 3.6%)
-    const tpFromSwing = touchedOB.swingHigh;
-    const tpFromMinPct = limitPrice * (1 + minTpPct / 100);
-    const tpFromMaxPct = limitPrice * (1 + maxTpPct / 100);
-    // swing high가 상한 이내면 사용, 초과하면 상한으로 제한
-    const tpRaw = Math.max(tpFromMinPct, Math.min(tpFromSwing, tpFromMaxPct));
-    const tpPrice = upbit.roundToTick(tpRaw, 'up');
+    // ATR 기반 동적 SL/TP
+    const slPrice = upbit.roundToTick(limitPrice * (1 - signal.slPct / 100), 'down');
+    const tpPrice = upbit.roundToTick(limitPrice * (1 + signal.tpPct / 100), 'up');
 
-    // 예상 수익률 체크 (매수가 기준)
+    // 최소 TP 확인
     const expectedPct = (tpPrice - limitPrice) / limitPrice * 100;
-    if (expectedPct < minTpPct) {
-      log(`${coin} OB 터치했으나 TP 너무 가까움 (${expectedPct.toFixed(2)}%) — 스킵`, 'warn');
+    if (expectedPct < 1.0) {
+      log(`${coin} 시그널 있으나 TP 너무 가까움 (${expectedPct.toFixed(2)}%) — 스킵`, 'warn');
       return;
     }
 
-    // SL = OB 하단 기준 (ob-engine/backtest와 동일 기준)
-    const slPrice = upbit.roundToTick(touchedOB.bottom * (1 - (strat.slPct || 0.8) / 100), 'down');
+    // SL이 진입가 이상이면 스킵
+    if (slPrice >= limitPrice) return;
 
-    // 잔고 조회 — 총자산(KRW+코인평가) 기준 균등 배분
+    // v2: 변동성 기반 포지션 사이징
     const accounts = await upbit.getAccounts(config.upbit.accessKey, config.upbit.secretKey);
     const krwAcc = accounts.find(a => a.currency === 'KRW');
     const krwTotal = krwAcc ? parseFloat(krwAcc.balance) + parseFloat(krwAcc.locked || 0) : 0;
     const krwAvail = krwAcc ? parseFloat(krwAcc.balance) : 0;
-    const allocAmount = Math.floor(krwTotal * 0.995 / strat.maxPositions);
 
-    // 실제 주문 금액 = 배분 금액과 가용잔고 중 작은 값
+    // 포지션 사이징: ATR 기반 리스크 1%
+    const maxRiskPct = v2.maxRiskPct || 1.0;
+    const atrBasedAmount = stratEngine.calcPositionSize(krwTotal, signal.atr, limitPrice, slPrice, maxRiskPct);
+    const allocAmount = Math.floor(Math.min(atrBasedAmount, krwTotal * 0.995 / strat.maxPositions));
+
     const orderAmount = Math.min(allocAmount, Math.floor(krwAvail * 0.995));
     if (orderAmount < strat.minOrderAmount) {
       const now = Date.now();
       if (!lastCashWarnTime || now - lastCashWarnTime > 5 * 60 * 1000) {
-        log(`자금 부족: 가용 ${Math.round(krwAvail).toLocaleString()}원 / 배분 ${allocAmount.toLocaleString()}원 (최소: ${strat.minOrderAmount.toLocaleString()}원)`, 'warn');
+        log(`자금 부족: 가용 ${Math.round(krwAvail).toLocaleString()}원 / 배분 ${allocAmount.toLocaleString()}원`, 'warn');
         lastCashWarnTime = now;
       }
       return;
     }
 
-    // 매수 수량 계산 (소수점 8자리까지)
     const buyVolume = Math.floor(orderAmount / limitPrice * 100000000) / 100000000;
+    const stratNames = signal.strategies.map(s => s.name).join('+');
 
-    log(`🎯 ${coin} 지정가 매수 주문! ${Math.round(limitPrice).toLocaleString()}원 × ${buyVolume.toFixed(4)}개 (현재가 ${price.toLocaleString()}원, 할인 ${buyDiscount}%) | TP: ${Math.round(tpPrice).toLocaleString()} SL: ${Math.round(slPrice).toLocaleString()}`, 'trade');
+    log(`🎯 ${coin} v2 매수! score=${signal.score} [${stratNames}] ${Math.round(limitPrice).toLocaleString()}원 × ${orderAmount.toLocaleString()}원 | TP:+${signal.tpPct}% SL:-${signal.slPct}%`, 'trade');
 
-    // 지정가 매수 주문
     const result = await upbit.buyLimit(
       config.upbit.accessKey, config.upbit.secretKey,
       market, buyVolume, limitPrice
     );
 
-    touchedOB.used = true;
+    if (signal.touchedOB) signal.touchedOB.used = true;
 
-    // 미체결 주문으로 등록 (5분 타이머) — 파일 영구 저장
     pendingBuyOrders[coin] = {
       orderId: result.uuid,
       market,
@@ -497,9 +487,13 @@ async function checkEntrySignal(market, price) {
       amount: orderAmount,
       volume: buyVolume,
       placedAt: Date.now(),
-      obImpulse: touchedOB.impulsePct,
+      signalScore: signal.score,
+      strategies: stratNames,
     };
     savePendingOrders();
+
+    // 시그널 소비 (다음 업데이트까지 재진입 방지)
+    signalCache[coin] = { signal: null, updatedAt: Date.now() };
 
     log(`📋 ${coin} 지정가 매수 대기 중 (5분 내 미체결 시 자동 취소)`, 'info');
     broadcastToClients({ type: 'state', data: getPublicState() });
@@ -586,6 +580,8 @@ async function checkPendingBuyOrders() {
           tpOrderId,
           entryTime: new Date().toISOString(),
           obImpulse: pending.obImpulse,
+          signalScore: pending.signalScore || 0,
+          strategies: pending.strategies || 'OB',
           sellRetries: 0,
         };
 
@@ -677,9 +673,10 @@ async function checkExitSignal(market, price) {
       // 디바운스: 빈번한 저장 방지 (30초마다 자동 저장으로 대체)
     }
 
-    // 트레일링 스탑 체크
-    const trailActivate = config.strategy.trailActivatePct || 0;
-    const trailPct = config.strategy.trailPct || 0;
+    // 트레일링 스탑 체크 (v2: config.strategy.v2 우선 참조)
+    const v2s = config.strategy.v2 || {};
+    const trailActivate = v2s.trailActivatePct || config.strategy.trailActivatePct || 0;
+    const trailPct = v2s.trailPct || config.strategy.trailPct || 0;
     if (trailActivate > 0 && trailPct > 0 && pos.highSinceEntry) {
       const gain = (pos.highSinceEntry - pos.entryPrice) / pos.entryPrice * 100;
       if (gain >= trailActivate) {
@@ -950,7 +947,19 @@ function getPublicState() {
       currentPrice: latestPrices[p.market] || 0,
       tpPrice: p.tpPrice, slPrice: p.slPrice, amount: p.amount,
       elapsed: Math.round((Date.now() - p.placedAt) / 1000),
+      signalScore: p.signalScore || 0,
+      strategies: p.strategies || '',
     })),
+    // v2: 활성 시그널 요약
+    activeSignals: Object.entries(signalCache)
+      .filter(([, v]) => v.signal && Date.now() - v.updatedAt < 5 * 60 * 1000)
+      .map(([coin, v]) => ({
+        coin,
+        score: v.signal.score,
+        strategies: v.signal.strategies.map(s => s.name),
+        slPct: v.signal.slPct,
+        tpPct: v.signal.tpPct,
+      })),
     autoTrading: config.autoTrading,
     lastScan: state.lastScan,
     consecutiveLosses,

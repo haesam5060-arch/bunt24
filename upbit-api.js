@@ -183,8 +183,10 @@ async function getOrder(accessKey, secretKey, uuid) {
 }
 
 // ── 캔들 조회 (5분봉) ─────────────────────────────
-async function getCandles(market, minutes = 5, count = 200) {
-  return publicGet(`/v1/candles/minutes/${minutes}?market=${market}&count=${count}`);
+async function getCandles(market, minutes = 5, count = 200, to = null) {
+  let url = `/v1/candles/minutes/${minutes}?market=${market}&count=${count}`;
+  if (to) url += `&to=${encodeURIComponent(to)}`;
+  return publicGet(url);
 }
 
 // ── 거래대금 상위 코인 조회 ───────────────────────
