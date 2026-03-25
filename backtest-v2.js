@@ -67,7 +67,7 @@ async function fetchCandleData(market, minutes = 5, totalCandles = 2000) {
 
 function runBacktest(candles, market, params = {}) {
   const {
-    minScore = 60,
+    minScore = 20,
     atrSlMultiplier = 1.5,
     rrRatio = 2.0,
     volatilityK = 0.5,
@@ -192,7 +192,7 @@ function runBacktest(candles, market, params = {}) {
 
     // 최소 TP% 확인
     const expectedPct = (signal.tp - entryPrice) / entryPrice * 100;
-    if (expectedPct < 1.0) continue;
+    if (expectedPct < 0.3) continue;
 
     // OB 사용 처리
     if (signal.touchedOB) signal.touchedOB.used = true;
@@ -324,7 +324,7 @@ function calcStats(trades) {
 function generateParamGrid() {
   const grid = [];
 
-  const minScores = [40, 50, 60];
+  const minScores = [15, 20, 30];
   const atrSlMults = [1.0, 1.5, 2.0];
   const rrRatios = [1.5, 2.0, 2.5, 3.0];
   const volatilityKs = [0.4, 0.5, 0.6];
@@ -509,7 +509,7 @@ async function main() {
     } else {
       // 기본 파라미터 백테스트
       const { trades, stats } = runBacktest(candles, ticker.market, {
-        minScore: 50,
+        minScore: 20,
         atrSlMultiplier: 1.5,
         rrRatio: 2.0,
         volatilityK: 0.5,

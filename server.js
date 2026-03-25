@@ -77,6 +77,7 @@ const pendingBuyOrders = loadPendingOrders();
 // ── WebSocket 재연결용 마켓 리스트 저장 ──
 let currentMarkets = [];
 let lastCashWarnTime = 0;
+let lastDailyLossWarnTime = 0;
 
 // ── 연속 손절 감시 ──────────────────────────────
 let consecutiveLosses = 0;
@@ -178,8 +179,8 @@ function connectUpbitWebSocket(markets) {
         latestPrices[market] = price;
 
         if (config.autoTrading) {
-          checkEntrySignal(market, price);
-          checkExitSignal(market, price);
+          checkEntrySignal(market, price).catch(e => log(`진입 체크 에러(${market}): ${e.message}`, 'error'));
+          checkExitSignal(market, price).catch(e => log(`청산 체크 에러(${market}): ${e.message}`, 'error'));
         }
       }
 
@@ -330,12 +331,12 @@ async function updateAllOBs() {
       // v2: 시그널 미리 계산 (마지막 봉 기준)
       const v2 = strat.v2 || {};
       const signal = stratEngine.generateSignal(ind, candles.length - 1, candles, activeOBs, {
-        minScore: v2.minScore || 20,
-        atrSlMultiplier: v2.atrSlMultiplier || 1.5,
-        rrRatio: v2.rrRatio || 1.5,
+        minScore: v2.minScore || 20,        // v3: 가중합 구조 반영 (config 우선, 폴백 20)
+        atrSlMultiplier: v2.atrSlMultiplier || 2.5,  // v3: 1.5 → 2.5
+        rrRatio: v2.rrRatio || 2.0,         // v3: 1.5 → 2.0
         volatilityK: v2.volatilityK || 0.5,
         maxAtrSlPct: v2.maxAtrSlPct || 3.0,
-        minAtrSlPct: v2.minAtrSlPct || 0.5,
+        minAtrSlPct: v2.minAtrSlPct || 1.5, // v3: 0.5 → 1.5
       });
 
       signalCache[item.coin] = { signal, updatedAt: Date.now() };
@@ -432,6 +433,26 @@ async function checkEntrySignal(market, price) {
     cooldownUntil = 0;
   }
 
+  // 일일 최대 손실 한도 체크 (-3%)
+  const dailyLossLimit = v2.maxDailyLossPct || 3.0;
+  if (stratEngine.checkDailyLossLimit && state.dailyPnl) {
+    const today = new Date().toLocaleDateString('sv-SE', { timeZone: 'Asia/Seoul' });
+    const todayEntry = state.dailyPnl.find(d => d.date === today);
+    if (todayEntry && todayEntry.pnl < 0) {
+      // Get approximate total capital from config
+      const approxCapital = config.strategy.initialCapital || 100000;
+      const dailyLossPct = Math.abs(todayEntry.pnl) / approxCapital * 100;
+      if (dailyLossPct >= dailyLossLimit) {
+        const now = Date.now();
+        if (!lastDailyLossWarnTime || now - lastDailyLossWarnTime > 30 * 60 * 1000) {
+          log(`🚫 일일 손실 한도 도달 (-${dailyLossPct.toFixed(1)}% >= -${dailyLossLimit}%) — 오늘 매매 중단`, 'warn');
+          lastDailyLossWarnTime = now;
+        }
+        return;
+      }
+    }
+  }
+
   // 기본 필터
   if (strat.excludeCoins && strat.excludeCoins.includes(coin)) return;
   if (strat.minCoinPrice && price < strat.minCoinPrice) return;
@@ -457,6 +478,8 @@ async function checkEntrySignal(market, price) {
   if (Date.now() - cached.updatedAt > 5 * 60 * 1000) return; // 5분 초과 시그널 무시
 
   const signal = cached.signal;
+
+  // v3: 레짐 정보 로깅 (전략 필터링은 generateSignal 내부에서 수행됨)
 
   // v2: 체결강도 확인 (매수세 > 매도세 필요)
   const ti = tradeIntensity[market];
@@ -485,9 +508,9 @@ async function checkEntrySignal(market, price) {
     const slPrice = upbit.roundToTick(limitPrice * (1 - signal.slPct / 100), 'down');
     const tpPrice = upbit.roundToTick(limitPrice * (1 + signal.tpPct / 100), 'up');
 
-    // 최소 TP 확인
+    // 최소 TP 확인 (수수료 0.1% 왕복 커버 + 최소 마진)
     const expectedPct = (tpPrice - limitPrice) / limitPrice * 100;
-    if (expectedPct < 1.0) {
+    if (expectedPct < 0.3) {
       log(`${coin} 시그널 있으나 TP 너무 가까움 (${expectedPct.toFixed(2)}%) — 스킵`, 'warn');
       return;
     }
@@ -661,6 +684,45 @@ async function checkPendingBuyOrders() {
         } catch (e) {
           log(`${coin} 매수 취소 실패: ${e.message}`, 'warn');
         }
+
+        // 부분 체결 확인 — 체결된 수량이 있으면 포지션 등록
+        try {
+          await sleep(500);
+          const cancelledOrder = await upbit.getOrder(config.upbit.accessKey, config.upbit.secretKey, pending.orderId);
+          const execVol = parseFloat(cancelledOrder.executed_volume || 0);
+          if (execVol > 0) {
+            let actualPrice = pending.limitPrice;
+            if (cancelledOrder.trades && cancelledOrder.trades.length > 0) {
+              let totalFunds = 0, totalVol = 0;
+              for (const t of cancelledOrder.trades) {
+                totalFunds += parseFloat(t.funds);
+                totalVol += parseFloat(t.volume);
+              }
+              if (totalVol > 0) actualPrice = totalFunds / totalVol;
+            }
+            const entryWithComm = actualPrice * 1.0005;
+            const tpSellPrice = upbit.roundToTick(pending.tpPrice, 'up');
+            let tpOrderId = null;
+            try {
+              const tpOrder = await upbit.sellLimit(config.upbit.accessKey, config.upbit.secretKey, pending.market, execVol, tpSellPrice);
+              tpOrderId = tpOrder.uuid;
+            } catch (e2) { log(`${coin} 부분체결 TP 예약 실패: ${e2.message}`, 'warn'); }
+
+            state.positions.push({
+              coin, market: pending.market, entryPrice: entryWithComm,
+              tpPrice: pending.tpPrice, slPrice: pending.slPrice,
+              amount: Math.round(actualPrice * execVol), volume: execVol,
+              orderId: pending.orderId, tpOrderId, entryTime: new Date().toISOString(),
+              signalScore: pending.signalScore || 0, strategies: pending.strategies || '',
+              sellRetries: 0,
+            });
+            saveState(state);
+            log(`⚠️ ${coin} 부분체결 ${execVol}개 → 포지션 등록 (${Math.round(actualPrice).toLocaleString()}원)`, 'trade');
+          }
+        } catch (e3) {
+          log(`${coin} 부분체결 확인 실패: ${e3.message}`, 'warn');
+        }
+
         delete pendingBuyOrders[coin];
         savePendingOrders();
         broadcastToClients({ type: 'state', data: getPublicState() });
@@ -679,9 +741,6 @@ async function checkPendingBuyOrders() {
 // SL/TIMEOUT: 지정가 취소 → 시장가 매도 (빠른 탈출)
 async function checkExitSignal(market, price) {
   const coin = market.replace('KRW-', '');
-
-  // 제외 코인 필터 (절대 매도 금지)
-  if (config.strategy.excludeCoins && config.strategy.excludeCoins.includes(coin)) return;
 
   const pos = state.positions.find(p => p.coin === coin);
   if (!pos) return;
@@ -814,7 +873,8 @@ function recordExit(pos, exitReason, actualExitPrice) {
 
   // 코인별 재진입 쿨다운 설정
   const candleMin = config.strategy.candleMinute || 1;
-  const cooldownCandles = config.strategy.cooldownCandles || 3;
+  const v2 = config.strategy.v2 || {};
+  const cooldownCandles = v2.cooldownCandles || config.strategy.cooldownCandles || 12;
   coinCooldowns[pos.coin] = Date.now() + (cooldownCandles * candleMin * 60 * 1000);
   const pnl = (netExitPrice - pos.entryPrice) / pos.entryPrice * pos.amount;
   const pnlPct = (netExitPrice - pos.entryPrice) / pos.entryPrice * 100;
@@ -864,6 +924,12 @@ function recordExit(pos, exitReason, actualExitPrice) {
     amount: pos.amount, pnl: Math.round(pnl),
     pnlPct: +pnlPct.toFixed(2),
     holdMinutes,
+    strategies: pos.strategies || '',
+    signalScore: pos.signalScore || 0,
+    slPct: pos.slPrice ? +((pos.entryPrice - pos.slPrice) / pos.entryPrice * 100).toFixed(2) : 0,
+    tpPct: pos.tpPrice ? +((pos.tpPrice - pos.entryPrice) / pos.entryPrice * 100).toFixed(2) : 0,
+    highSinceEntry: pos.highSinceEntry || 0,
+    maxUnrealizedPct: pos.highSinceEntry ? +((pos.highSinceEntry - pos.entryPrice) / pos.entryPrice * 100).toFixed(2) : 0,
   };
 
   appendTradeLog(tradeRecord);

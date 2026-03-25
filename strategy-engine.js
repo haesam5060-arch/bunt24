@@ -1,27 +1,30 @@
 /**
- * 24번트 v2 — 멀티 전략 스코어링 엔진
+ * 24번트 v3 — 레짐 적응형 멀티 전략 스코어링 엔진
  *
- * 기존 OB-only 전략의 치명적 결함 해결:
- *   - 58% SL 5분내 히트 → 추세 확인 후 진입
- *   - 고정 SL/TP → ATR 기반 동적 SL/TP
- *   - 단일 전략 → 5개 전략 스코어 합산
+ * v2 → v3 주요 변경:
+ *   - 평균회귀(RSI) 전략을 주력으로 승격 (가중 0.40)
+ *   - BB 스퀴즈 / EMA 크로스 → 필터 역할로 강등 (가중 0.10씩)
+ *   - 레짐 감지(ADX + ATR%) → 레짐에 맞지 않는 전략 차단
+ *   - SL/TP: ATR×2.5, R:R 1:2, minSL 1.5% (스탑 헌팅 방지)
+ *   - Fractional Kelly 포지션 사이징
+ *   - 일일 손실 한도 체크
+ *   - BUG-01, BUG-14, BUG-18 수정
  *
- * 전략 구성:
- *   1. RSI 과매도 반등 (RSI < 30 → 반등 확인)
- *   2. 볼린저 밴드 스퀴즈 돌파
- *   3. 변동성 돌파 (래리 윌리엄스 K값)
- *   4. EMA 크로스 + ADX 추세 강도
- *   5. OB 터치 (기존 개선 — 추세 필터 필수)
- *
- * 각 전략은 0~100 점수 → 합산 점수가 임계값 이상이면 진입
+ * 전략 구성 (v3):
+ *   1. RSI 평균회귀 — 0.40 (주력)
+ *   2. BB 스퀴즈   — 0.10 (필터/확인)
+ *   3. 변동성 돌파  — 0.20
+ *   4. EMA 크로스   — 0.10 (필터/확인)
+ *   5. OB 터치      — 0.20
  */
 
 // ═══════════════════════════════════════════════════
 // 기술 지표 계산 함수
 // ═══════════════════════════════════════════════════
 
-/** EMA (Exponential Moving Average) */
+/** EMA (Exponential Moving Average) — BUG-01: 빈 배열 가드 */
 function calcEMA(data, period) {
+  if (!data || data.length === 0) return [];
   const ema = [data[0]];
   const k = 2 / (period + 1);
   for (let i = 1; i < data.length; i++) {
@@ -211,20 +214,59 @@ function calcVolMA(volumes, period = 20) {
 }
 
 // ═══════════════════════════════════════════════════
-// 전략 스코어링 시스템
+// 레짐 감지 (v3 신규)
+// ═══════════════════════════════════════════════════
+
+/**
+ * 시장 레짐 감지
+ * - ADX > 25 → trending (추세)
+ * - ADX < 20 → ranging  (횡보)
+ * - 20~25    → transitioning (전환 중)
+ * - ATR% = ATR/price × 100 (변동성 수준)
+ *
+ * @returns {{ regime: 'trending'|'ranging'|'transitioning', atrPct: number, adx: number|null }}
+ */
+function detectRegime(ind, i) {
+  const adxVal = ind.adx.adx[i];
+  const atr = ind.atr14[i];
+  const price = ind.closes[i];
+
+  const atrPct = (atr && price > 0) ? (atr / price) * 100 : 0;
+  const adx = adxVal !== null ? adxVal : null;
+
+  let regime = 'transitioning';
+  if (adx !== null) {
+    if (adx > 25) regime = 'trending';
+    else if (adx < 20) regime = 'ranging';
+  }
+
+  return { regime, atrPct: +atrPct.toFixed(3), adx };
+}
+
+// ═══════════════════════════════════════════════════
+// 전략 스코어링 시스템 (v3 개편)
 // ═══════════════════════════════════════════════════
 
 /**
  * 모든 지표를 한 번에 계산하여 캐시
+ * BUG-18: candle validation — undefined close/high/low 필터링
  */
 function computeIndicators(candles) {
-  const closes = candles.map(c => c.close);
-  const highs = candles.map(c => c.high);
-  const lows = candles.map(c => c.low);
-  const volumes = candles.map(c => c.volume);
+  // BUG-18: 유효하지 않은 캔들 필터링
+  const validCandles = candles.filter(c =>
+    c.close !== undefined && c.close !== null &&
+    c.high !== undefined && c.high !== null &&
+    c.low !== undefined && c.low !== null
+  );
+
+  const closes = validCandles.map(c => c.close);
+  const highs = validCandles.map(c => c.high);
+  const lows = validCandles.map(c => c.low);
+  const volumes = validCandles.map(c => c.volume || 0);
 
   return {
     closes, highs, lows, volumes,
+    candles: validCandles,
     rsi14: calcRSI(closes, 14),
     rsi7: calcRSI(closes, 7),
     atr14: calcATR(highs, lows, closes, 14),
@@ -235,16 +277,17 @@ function computeIndicators(candles) {
     ema50: calcEMA(closes, 50),
     ema200: calcEMA(closes, 200),
     macd: calcMACD(closes, 12, 26, 9),
-    vwap: calcVWAP(candles),
+    vwap: calcVWAP(validCandles),
     volMA: calcVolMA(volumes, 20),
   };
 }
 
 /**
- * 전략 1: RSI 과매도 반등
- * - RSI(14) < 30 진입, 반등 확인 (이전 봉 RSI < 현재 RSI)
- * - 거래량 평균 이상
- * - 점수: 0~100
+ * 전략 1: RSI 평균회귀 (v3 주력 — 가중 0.40)
+ * - RSI(14) < 30 진입, 반등 확인
+ * - VWAP 아래 = 보너스 (평균회귀 기대값 높음)
+ * - 최근 스윙 로우 근접 = 지지 확인 보너스
+ * - 거래량 확인
  */
 function scoreRSIMeanReversion(ind, i) {
   const rsi = ind.rsi14[i];
@@ -253,11 +296,11 @@ function scoreRSIMeanReversion(ind, i) {
 
   let score = 0;
 
-  // RSI 과매도 구간
-  if (rsi < 20) score += 40;
-  else if (rsi < 25) score += 30;
-  else if (rsi < 30) score += 20;
-  else if (rsi < 35) score += 5;
+  // RSI 과매도 구간 (v3: 점수 상향)
+  if (rsi < 20) score += 45;
+  else if (rsi < 25) score += 35;
+  else if (rsi < 30) score += 25;
+  else if (rsi < 35) score += 10;
   else return 0; // RSI > 35 → 신호 없음
 
   // RSI 반등 확인 (V자 반등)
@@ -266,6 +309,27 @@ function scoreRSIMeanReversion(ind, i) {
   // RSI(7) 단기 과매도
   const rsi7 = ind.rsi7[i];
   if (rsi7 !== null && rsi7 < 25) score += 15;
+
+  // v3: VWAP 확인 — 가격이 VWAP 아래 = 평균회귀 보너스
+  const vwap = ind.vwap[i];
+  const price = ind.closes[i];
+  if (vwap && price < vwap) {
+    const distPct = ((vwap - price) / vwap) * 100;
+    if (distPct > 1.0) score += 20;       // VWAP 아래 1% 이상
+    else if (distPct > 0.3) score += 12;  // VWAP 아래 0.3~1%
+    else score += 5;
+  }
+
+  // v3: 최근 스윙 로우 근접 확인 (지지 레벨)
+  if (i >= 20) {
+    let swingLow = Infinity;
+    for (let j = i - 20; j < i; j++) {
+      if (ind.lows[j] < swingLow) swingLow = ind.lows[j];
+    }
+    const lowDist = ((price - swingLow) / swingLow) * 100;
+    if (lowDist < 0.5) score += 15;       // 스윙 로우 0.5% 이내
+    else if (lowDist < 1.5) score += 8;   // 1.5% 이내
+  }
 
   // 거래량 확인 (평균 이상)
   const volMA = ind.volMA[i];
@@ -276,15 +340,16 @@ function scoreRSIMeanReversion(ind, i) {
 }
 
 /**
- * 전략 2: 볼린저 밴드 스퀴즈 돌파
- * - 밴드폭 축소 후 하단 터치 → 반등
- * - 밴드폭이 최근 20봉 중 최소 → 스퀴즈 상태
+ * 전략 2: 볼린저 밴드 스퀴즈 (v3: 필터 역할로 강등)
+ * - 최대 점수 60으로 하향
+ * - 거래량 미확인 시 최대 30
  */
 function scoreBBSqueeze(ind, i) {
   const bb = ind.bb;
   if (bb.bandwidth[i] === null || i < 25) return 0;
 
   let score = 0;
+  let hasVolumeConfirm = false;
 
   // 스퀴즈 감지 (밴드폭이 최근 20봉 중 하위 25%)
   const recentBW = [];
@@ -298,27 +363,35 @@ function scoreBBSqueeze(ind, i) {
   const isSqueezing = bb.bandwidth[i] <= pct25;
 
   if (!isSqueezing) return 0;
-  score += 30;
+  score += 15;
 
   // 가격이 하단 밴드 터치 or 이탈
   const price = ind.closes[i];
-  if (price <= bb.lower[i]) score += 30;
-  else if (price <= bb.lower[i] * 1.005) score += 20; // 하단 근접 (0.5% 이내)
+  if (price <= bb.lower[i]) score += 15;
+  else if (price <= bb.lower[i] * 1.005) score += 10; // 하단 근접 (0.5% 이내)
 
   // 반등 확인 (이전 봉 대비 가격 상승)
-  if (ind.closes[i] > ind.closes[i - 1]) score += 20;
+  if (ind.closes[i] > ind.closes[i - 1]) score += 10;
 
-  // 거래량 증가
+  // 거래량 확인 (v3: 없으면 최대 30)
   const volMA = ind.volMA[i];
-  if (volMA && ind.volumes[i] > volMA * 1.5) score += 20;
+  if (volMA && ind.volumes[i] > volMA * 1.5) {
+    score += 15;
+    hasVolumeConfirm = true;
+  } else if (volMA && ind.volumes[i] > volMA) {
+    score += 8;
+    hasVolumeConfirm = true;
+  }
 
-  return Math.min(score, 100);
+  // v3: 거래량 미확인 시 최대 30, 전체 최대 60
+  const maxScore = hasVolumeConfirm ? 60 : 30;
+  return Math.min(score, maxScore);
 }
 
 /**
  * 전략 3: 변동성 돌파 (래리 윌리엄스)
  * - 당일 시가 + (전일 고가-전일 저가) × K
- * - K = 최적화 대상 (기본 0.5)
+ * - BUG-14: open !== undefined 체크
  */
 function scoreVolatilityBreakout(ind, i, candles, k = 0.5) {
   if (i < 2) return 0;
@@ -326,8 +399,11 @@ function scoreVolatilityBreakout(ind, i, candles, k = 0.5) {
   const prevRange = ind.highs[i - 1] - ind.lows[i - 1];
   if (prevRange <= 0) return 0;
 
-  // 현재 봉의 시가 기준 돌파 레벨
+  // BUG-14: open 값 검증
   const open = candles[i].open;
+  if (open === undefined || open === null) return 0;
+
+  // 현재 봉의 시가 기준 돌파 레벨
   const breakoutLevel = open + prevRange * k;
   const price = ind.closes[i];
 
@@ -354,11 +430,9 @@ function scoreVolatilityBreakout(ind, i, candles, k = 0.5) {
 }
 
 /**
- * 전략 4: EMA 크로스 + ADX 추세 강도
- * - EMA9 > EMA21 (골든크로스)
- * - 가격 > EMA50 (중기 상승 추세)
- * - ADX > 25 (추세 존재)
- * - +DI > -DI (상승 방향)
+ * 전략 4: EMA 크로스 (v3: 필터 역할로 강등)
+ * - 최대 점수 60
+ * - ADX > 25 필수 (미충족 시 0점 반환)
  */
 function scoreEMACross(ind, i) {
   if (i < 3) return 0;
@@ -367,40 +441,39 @@ function scoreEMACross(ind, i) {
   const ema50 = ind.ema50[i];
   const adxData = ind.adx;
 
+  // v3: ADX > 25 필수 — 약한 추세에서 EMA 크로스는 무의미
+  if (adxData.adx[i] === null || adxData.adx[i] <= 25) return 0;
+
   let score = 0;
 
   // EMA9 > EMA21 (단기 상승 추세)
-  if (ema9 > ema21) score += 20;
+  if (ema9 > ema21) score += 15;
   else return 0; // 기본 조건 미충족
 
   // EMA9 > EMA21 크로스 발생 (최근 3봉 내)
   for (let j = Math.max(1, i - 3); j <= i; j++) {
     if (ind.ema9[j] > ind.ema21[j] && ind.ema9[j - 1] <= ind.ema21[j - 1]) {
-      score += 20; // 신규 크로스 보너스
+      score += 15; // 신규 크로스 보너스
       break;
     }
   }
 
   // 가격 > EMA50 (중기 상승)
-  if (ind.closes[i] > ema50) score += 15;
-
-  // ADX > 25 (강한 추세)
-  if (adxData.adx[i] !== null && adxData.adx[i] > 25) score += 20;
-  else if (adxData.adx[i] !== null && adxData.adx[i] > 20) score += 10;
+  if (ind.closes[i] > ema50) score += 10;
 
   // +DI > -DI (상승 방향)
   if (adxData.plusDI[i] !== null && adxData.minusDI[i] !== null) {
-    if (adxData.plusDI[i] > adxData.minusDI[i]) score += 15;
+    if (adxData.plusDI[i] > adxData.minusDI[i]) score += 10;
   }
 
   // MACD 히스토그램 양수
   if (ind.macd.histogram[i] > 0) score += 10;
 
-  return Math.min(score, 100);
+  return Math.min(score, 60);
 }
 
 /**
- * 전략 5: OB 터치 (개선 — 추세 확인 필수)
+ * 전략 5: OB 터치 (v3: 가중 0.20으로 승격)
  * - 기존 OB 감지 로직 활용
  * - 추가: EMA50 위 + RSI > 40 + 연속 음봉 아님
  */
@@ -464,11 +537,11 @@ function scoreVWAP(ind, i) {
 }
 
 // ═══════════════════════════════════════════════════
-// 종합 시그널 생성
+// 종합 시그널 생성 (v3 레짐 적응형)
 // ═══════════════════════════════════════════════════
 
 /**
- * 진입 시그널 생성
+ * 진입 시그널 생성 (v3)
  *
  * @param {Object} ind - 계산된 지표들
  * @param {number} i - 현재 캔들 인덱스
@@ -476,16 +549,16 @@ function scoreVWAP(ind, i) {
  * @param {Array} activeOBs - 활성 오더블록 (없으면 [])
  * @param {Object} params - 전략 파라미터
  *
- * @returns {Object|null} { score, strategies, sl, tp, atrSL } 또는 null
+ * @returns {Object|null} { score, strategies, sl, tp, atrSL, regime } 또는 null
  */
 function generateSignal(ind, i, candles, activeOBs, params = {}) {
   const {
-    minScore = 60,           // 최소 진입 점수
-    atrSlMultiplier = 1.5,   // ATR × 배수 = SL 거리
-    rrRatio = 2.0,           // Risk:Reward 비율
-    volatilityK = 0.5,       // 래리 윌리엄스 K값
-    maxAtrSlPct = 3.0,       // 최대 SL 퍼센트 (ATR 기반 상한)
-    minAtrSlPct = 0.5,       // 최소 SL 퍼센트
+    minScore = 20,             // v3: 최소 진입 점수 (가중합 구조 — 2개 전략 이상 합산 기준)
+    atrSlMultiplier = 2.5,     // v3: ATR × 2.5 = SL 거리 (v2: 1.5)
+    rrRatio = 2.0,             // v3: R:R 1:2 (v2: 1.5)
+    volatilityK = 0.5,        // 래리 윌리엄스 K값
+    maxAtrSlPct = 3.0,        // 최대 SL 퍼센트
+    minAtrSlPct = 1.5,        // v3: 최소 SL 1.5% (v2: 0.5) — 스탑 헌팅 방지
   } = params;
 
   if (i < 50) return null; // 최소 데이터 요구
@@ -494,7 +567,10 @@ function generateSignal(ind, i, candles, activeOBs, params = {}) {
   const atr = ind.atr14[i];
   if (!atr || atr <= 0) return null;
 
-  // 각 전략 점수 계산
+  // ── v3: 레짐 감지 ──
+  const regimeInfo = detectRegime(ind, i);
+
+  // ── 각 전략 점수 계산 ──
   const scores = {
     rsiMR: scoreRSIMeanReversion(ind, i),
     bbSqueeze: scoreBBSqueeze(ind, i),
@@ -511,16 +587,31 @@ function generateSignal(ind, i, candles, activeOBs, params = {}) {
   }
   scores.obTouch = obScore;
 
+  // ── v3: 레짐 기반 전략 감점 (zero-out → 감점 방식으로 변경) ──
+  // ranging → 모멘텀 전략 70% 감점 (volBreakout, emaCross)
+  // trending → 평균회귀 전략 70% 감점 (rsiMR, bbSqueeze, obTouch)
+  // transitioning → 감점 없음
+  if (regimeInfo.regime === 'ranging') {
+    scores.volBreakout = Math.round(scores.volBreakout * 0.3);
+    scores.emaCross = Math.round(scores.emaCross * 0.3);
+  } else if (regimeInfo.regime === 'trending') {
+    scores.rsiMR = Math.round(scores.rsiMR * 0.3);
+    scores.bbSqueeze = Math.round(scores.bbSqueeze * 0.3);
+    scores.obTouch = Math.round(scores.obTouch * 0.3);
+  }
+
+  const effectiveMinScore = minScore; // 레짐별 차별 제거, generateSignal 내부 감점으로 충분
+
   // VWAP 보너스 (독립 전략은 아님, 추가 확인)
   const vwapBonus = scoreVWAP(ind, i);
 
-  // 가중 합산 (각 전략 최대 100점, 가중치 적용)
+  // v3: 전략 가중치 변경
   const weights = {
-    rsiMR: 0.25,
-    bbSqueeze: 0.15,
-    volBreakout: 0.20,
-    emaCross: 0.25,
-    obTouch: 0.15,
+    rsiMR: 0.40,       // v2: 0.25 → v3: 0.40 (주력)
+    bbSqueeze: 0.10,   // v2: 0.15 → v3: 0.10 (필터)
+    volBreakout: 0.20,  // 유지
+    emaCross: 0.10,    // v2: 0.25 → v3: 0.10 (필터)
+    obTouch: 0.20,     // v2: 0.15 → v3: 0.20 (승격)
   };
 
   let totalScore = 0;
@@ -529,21 +620,24 @@ function generateSignal(ind, i, candles, activeOBs, params = {}) {
   for (const [key, weight] of Object.entries(weights)) {
     const s = scores[key] * weight;
     totalScore += s;
-    if (scores[key] >= 30) { // 의미있는 신호를 보낸 전략만 기록
+    if (scores[key] >= 15) { // 의미있는 신호를 보낸 전략만 기록 (30→15, 레짐 감점 후에도 집계되도록)
       activeStrategies.push({ name: key, score: scores[key] });
     }
   }
 
   // VWAP 보너스 추가
   totalScore += vwapBonus * 0.1;
+  if (vwapBonus >= 10) {
+    activeStrategies.push({ name: 'vwap', score: vwapBonus });
+  }
 
   // 최소 2개 이상의 전략이 신호를 보내야 함 (단일 전략 의존 방지)
   if (activeStrategies.length < 2) return null;
 
   // 임계값 미달
-  if (totalScore < minScore) return null;
+  if (totalScore < effectiveMinScore) return null;
 
-  // ── ATR 기반 동적 SL/TP ──
+  // ── ATR 기반 동적 SL/TP (v3: 더 넓은 SL, 더 높은 R:R) ──
   let slDistance = atr * atrSlMultiplier;
   let slPct = (slDistance / price) * 100;
 
@@ -565,6 +659,7 @@ function generateSignal(ind, i, candles, activeOBs, params = {}) {
     atr: +atr.toFixed(2),
     touchedOB,
     vwapBonus,
+    regime: regimeInfo, // v3: 레짐 정보 포함
   };
 }
 
@@ -628,11 +723,11 @@ function getTimeBonus(hour) {
 }
 
 // ═══════════════════════════════════════════════════
-// 리스크 관리
+// 리스크 관리 (v3 확장)
 // ═══════════════════════════════════════════════════
 
 /**
- * 변동성 기반 포지션 사이징
+ * 변동성 기반 포지션 사이징 (기존 유지)
  * - ATR이 클수록 → 작은 포지션
  * - ATR이 작을수록 → 큰 포지션
  * - 최대 손실을 총자산의 1%로 제한
@@ -651,6 +746,57 @@ function calcPositionSize(totalCapital, atr, entryPrice, slPrice, maxRiskPct = 1
   return Math.min(maxPosition, maxAlloc);
 }
 
+/**
+ * v3: Fractional Kelly 포지션 사이징
+ *
+ * Kelly% = winRate - (1 - winRate) / (avgWin / avgLoss)
+ * Quarter Kelly = Kelly% × 0.25 (안전 마진)
+ * 결과를 자본의 1~5% 범위로 clamp
+ *
+ * @param {number} totalCapital - 총 자본금
+ * @param {number} winRate - 승률 (0~1)
+ * @param {number} avgWin - 평균 수익 금액 (양수)
+ * @param {number} avgLoss - 평균 손실 금액 (양수)
+ * @param {number} maxRiskPct - 최대 리스크% (기본 5%)
+ * @returns {number} 투자할 금액
+ */
+function calcKellyPositionSize(totalCapital, winRate, avgWin, avgLoss, maxRiskPct = 5.0) {
+  // 트레이드 히스토리 부족 시 보수적 폴백
+  if (!winRate || !avgWin || !avgLoss || avgLoss <= 0 || avgWin <= 0) {
+    return totalCapital * 0.01; // 고정 1% 리스크
+  }
+
+  const payoffRatio = avgWin / avgLoss;
+  const kellyPct = winRate - (1 - winRate) / payoffRatio;
+
+  // Kelly가 음수 → 손실 예상 전략, 최소값으로 폴백
+  if (kellyPct <= 0) {
+    return totalCapital * 0.01;
+  }
+
+  // Quarter Kelly (0.25배) 적용
+  const quarterKelly = kellyPct * 0.25;
+
+  // 1% ~ maxRiskPct 범위로 clamp
+  const clampedPct = Math.max(0.01, Math.min(quarterKelly, maxRiskPct / 100));
+
+  return totalCapital * clampedPct;
+}
+
+/**
+ * v3: 일일 손실 한도 체크
+ *
+ * @param {number} dailyPnl - 당일 누적 손익 (음수 = 손실)
+ * @param {number} totalCapital - 총 자본금
+ * @param {number} maxDailyLossPct - 최대 일일 손실 한도% (기본 -3%)
+ * @returns {boolean} true = 한도 초과 → 거래 중단
+ */
+function checkDailyLossLimit(dailyPnl, totalCapital, maxDailyLossPct = -3) {
+  if (!totalCapital || totalCapital <= 0) return true; // 자본 정보 없으면 안전 차단
+  const lossPct = (dailyPnl / totalCapital) * 100;
+  return lossPct <= maxDailyLossPct;
+}
+
 // ═══════════════════════════════════════════════════
 // 모듈 내보내기
 // ═══════════════════════════════════════════════════
@@ -661,6 +807,8 @@ module.exports = {
   // 종합 분석
   computeIndicators,
   generateSignal,
+  // 레짐 감지 (v3 신규)
+  detectRegime,
   // 개별 전략 점수
   scoreRSIMeanReversion,
   scoreBBSqueeze,
@@ -673,4 +821,7 @@ module.exports = {
   isGoodTradingHour,
   getTimeBonus,
   calcPositionSize,
+  // v3 리스크 관리
+  calcKellyPositionSize,
+  checkDailyLossLimit,
 };
