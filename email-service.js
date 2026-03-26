@@ -46,7 +46,7 @@ async function sendBuyAlert(position) {
   const html = `
   <div style="font-family:-apple-system,sans-serif;max-width:500px;margin:0 auto;background:#0d1117;color:#e6edf3;border-radius:12px;overflow:hidden;">
     <div style="background:#b08800;padding:16px 20px;text-align:center;">
-      <h2 style="margin:0;color:#fff;font-size:18px;">🟡 매수 체결</h2>
+      <h2 style="margin:0;color:#fff;font-size:18px;">매수 체결</h2>
     </div>
     <div style="padding:20px;">
       <div style="text-align:center;margin-bottom:16px;">
@@ -81,7 +81,7 @@ async function sendSellAlert(trade) {
   const html = `
   <div style="font-family:-apple-system,sans-serif;max-width:500px;margin:0 auto;background:#0d1117;color:#e6edf3;border-radius:12px;overflow:hidden;">
     <div style="background:${bgColor};padding:16px 20px;text-align:center;">
-      <h2 style="margin:0;color:#fff;font-size:18px;">${icon} 매도 — ${reasonText}</h2>
+      <h2 style="margin:0;color:#fff;font-size:18px;">매도 — ${reasonText}</h2>
     </div>
     <div style="padding:20px;">
       <div style="text-align:center;margin-bottom:16px;">

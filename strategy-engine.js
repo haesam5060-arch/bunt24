@@ -553,12 +553,12 @@ function scoreVWAP(ind, i) {
  */
 function generateSignal(ind, i, candles, activeOBs, params = {}) {
   const {
-    minScore = 20,             // v3: 최소 진입 점수 (가중합 구조 — 2개 전략 이상 합산 기준)
-    atrSlMultiplier = 2.5,     // v3: ATR × 2.5 = SL 거리 (v2: 1.5)
-    rrRatio = 2.0,             // v3: R:R 1:2 (v2: 1.5)
+    minScore = 20,             // v4: 최소 진입 점수
+    atrSlMultiplier = 3.5,     // v4: ATR × 3.5 = SL 거리 (v3: 2.5)
+    rrRatio = 1.5,             // v4: R:R 1:1.5 (v3: 1:2)
     volatilityK = 0.5,        // 래리 윌리엄스 K값
-    maxAtrSlPct = 3.0,        // 최대 SL 퍼센트
-    minAtrSlPct = 1.5,        // v3: 최소 SL 1.5% (v2: 0.5) — 스탑 헌팅 방지
+    maxAtrSlPct = 5.0,        // v4: 최대 SL 5% (v3: 3%)
+    minAtrSlPct = 2.5,        // v4: 최소 SL 2.5% (v3: 1.5%) — 노이즈 필터 강화
   } = params;
 
   if (i < 50) return null; // 최소 데이터 요구

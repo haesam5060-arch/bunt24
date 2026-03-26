@@ -23,6 +23,7 @@ const upbit = require('./upbit-api');
 const ob = require('./ob-engine');
 const stratEngine = require('./strategy-engine');
 const emailService = require('./email-service');
+const waveHarvest = require('./wave-harvest-engine');
 
 // ── 설정 로드 ─────────────────────────────────────
 const CONFIG_PATH = path.join(__dirname, 'data', 'config.json');
@@ -182,6 +183,9 @@ function connectUpbitWebSocket(markets) {
           checkEntrySignal(market, price).catch(e => log(`진입 체크 에러(${market}): ${e.message}`, 'error'));
           checkExitSignal(market, price).catch(e => log(`청산 체크 에러(${market}): ${e.message}`, 'error'));
         }
+
+        // WaveHarvest에 실시간 가격 전달
+        waveHarvest.onPriceUpdate(market, price);
       }
 
       // v2: 체결 데이터 → 체결강도 집계
@@ -562,6 +566,7 @@ async function checkEntrySignal(market, price) {
       placedAt: Date.now(),
       signalScore: signal.score,
       strategies: stratNames,
+      atr: signal.atr,  // v4: 트레일링 동적 계산용
     };
     savePendingOrders();
 
@@ -656,6 +661,7 @@ async function checkPendingBuyOrders() {
           signalScore: pending.signalScore || 0,
           strategies: pending.strategies || 'OB',
           sellRetries: 0,
+          atr: pending.atr || 0,  // v4: 동적 트레일링용
         };
 
         state.positions.push(position);
@@ -715,6 +721,7 @@ async function checkPendingBuyOrders() {
               orderId: pending.orderId, tpOrderId, entryTime: new Date().toISOString(),
               signalScore: pending.signalScore || 0, strategies: pending.strategies || '',
               sellRetries: 0,
+              atr: pending.atr || 0,  // v4: 동적 트레일링용
             });
             saveState(state);
             log(`⚠️ ${coin} 부분체결 ${execVol}개 → 포지션 등록 (${Math.round(actualPrice).toLocaleString()}원)`, 'trade');
@@ -782,22 +789,34 @@ async function checkExitSignal(market, price) {
       // 디바운스: 빈번한 저장 방지 (30초마다 자동 저장으로 대체)
     }
 
-    // 트레일링 스탑 체크 (v2: config.strategy.v2 우선 참조)
+    // v4: ATR 동적 트레일링 스탑 (ATR×1.2, 0.5~2.0% 클램프)
     const v2s = config.strategy.v2 || {};
-    const trailActivate = v2s.trailActivatePct || config.strategy.trailActivatePct || 0;
-    const trailPct = v2s.trailPct || config.strategy.trailPct || 0;
-    if (trailActivate > 0 && trailPct > 0 && pos.highSinceEntry) {
+    const trailActivate = v2s.trailActivatePct || config.strategy.trailActivatePct || 1.5;
+    if (trailActivate > 0 && pos.highSinceEntry && pos.atr) {
       const gain = (pos.highSinceEntry - pos.entryPrice) / pos.entryPrice * 100;
       if (gain >= trailActivate) {
-        const trailStop = pos.highSinceEntry * (1 - trailPct / 100);
+        // v4: ATR×1.2 동적 트레일, 0.5~2.0% 클램프
+        let trailPctDynamic = (pos.atr * 1.2) / pos.highSinceEntry * 100;
+        trailPctDynamic = Math.max(0.5, Math.min(2.0, trailPctDynamic));
+        const trailStop = pos.highSinceEntry * (1 - trailPctDynamic / 100);
         if (price <= trailStop) {
           exitReason = 'TRAIL';
         }
       }
     }
 
+    // v4: SL 5분 유예 — SL 도달 후 5분 대기, 여전히 아래면 실행
     if (!exitReason && price <= pos.slPrice) {
-      exitReason = 'SL';
+      if (!pos.slHitTime) {
+        pos.slHitTime = Date.now();
+        log(`${coin} SL 터치 — 5분 유예 시작 (${price.toLocaleString()} ≤ ${pos.slPrice.toLocaleString()})`, 'warn');
+      } else if (Date.now() - pos.slHitTime >= 5 * 60 * 1000) {
+        exitReason = 'SL';
+      }
+    } else if (price > pos.slPrice && pos.slHitTime) {
+      // SL 위로 복귀 → 유예 리셋
+      log(`${coin} SL 유예 취소 — 가격 복귀`, 'info');
+      delete pos.slHitTime;
     }
     if (!exitReason) {
       const holdMs = Date.now() - new Date(pos.entryTime).getTime();
@@ -1197,6 +1216,48 @@ app.post('/api/sell-all', async (req, res) => {
   res.json({ ok: true });
 });
 
+// ── WaveHarvest API ──────────────────────────────
+app.get('/api/wh/state', (req, res) => {
+  res.json(waveHarvest.getState());
+});
+
+app.get('/api/wh/logs', (req, res) => {
+  res.json(waveHarvest.getLogs());
+});
+
+app.get('/api/wh/trades', (req, res) => {
+  try {
+    const whLogPath = path.join(__dirname, 'data', 'wh-trade-log.json');
+    const trades = JSON.parse(fs.readFileSync(whLogPath, 'utf-8'));
+    res.json(trades.slice(0, 100));
+  } catch { res.json([]); }
+});
+
+app.post('/api/wh/toggle', (req, res) => {
+  const whState = waveHarvest.getState();
+  if (whState.running && whState.enabled) {
+    waveHarvest.disable();
+    log('[WH] WaveHarvest 비활성화', 'warn');
+  } else if (whState.running && !whState.enabled) {
+    waveHarvest.enable();
+    log('[WH] WaveHarvest 활성화', 'trade');
+  }
+  res.json(waveHarvest.getState());
+});
+
+app.post('/api/wh/update-config', (req, res) => {
+  const newCfg = req.body;
+  if (newCfg && typeof newCfg === 'object') {
+    // config.json에도 저장
+    config.waveHarvest = { ...config.waveHarvest, ...newCfg };
+    fs.writeFileSync(CONFIG_PATH, JSON.stringify(config, null, 2));
+    waveHarvest.updateConfig(config.waveHarvest);
+    res.json({ ok: true, config: config.waveHarvest });
+  } else {
+    res.status(400).json({ error: 'invalid body' });
+  }
+});
+
 app.post('/api/reset', (req, res) => {
   if (state.positions.length > 0) {
     return res.status(400).json({ error: '보유 포지션이 있으면 초기화할 수 없습니다. 먼저 전체 매도하세요.' });
@@ -1264,6 +1325,23 @@ const server = app.listen(PORT, async () => {
 
   // 30초마다 state 자동 저장 (highSinceEntry 등 실시간 변경분)
   setInterval(() => { saveState(state); }, 30000);
+
+  // ── WaveHarvest 엔진 시작 ──
+  if (config.waveHarvest) {
+    try {
+      const whConfig = config.waveHarvest;
+      const whKeys = { accessKey: config.upbit.accessKey, secretKey: config.upbit.secretKey };
+      await waveHarvest.start(whConfig, whKeys, log);
+      if (whConfig.enabled) {
+        waveHarvest.enable();
+        log('[WH] WaveHarvest 엔진 활성화 상태로 시작');
+      } else {
+        log('[WH] WaveHarvest 엔진 대기 상태로 시작 (enabled: false)');
+      }
+    } catch (e) {
+      log(`[WH] WaveHarvest 시작 실패: ${e.message}`, 'error');
+    }
+  }
 });
 
 // WebSocket 서버
