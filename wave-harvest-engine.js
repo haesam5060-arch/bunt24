@@ -416,16 +416,16 @@ async function checkPendingOrders() {
       const info = await upbit.getOrder(apiKeys.accessKey, apiKeys.secretKey, order.orderId);
 
       if (info.state === 'done' || info.state === 'cancel') {
-        if (info.state === 'done') {
-          // 체결 완료 → 포지션 등록
-          const executedVolume = parseFloat(info.executed_volume) || 0;
-          if (executedVolume <= 0) {
-            log(`${coin} 체결량 0 — 포지션 등록 스킵`, 'warn');
-            delete pendingOrders[coin];
-            continue;
+        // 업비트 시장가 매수(ord_type='price')는 체결 후 잔여금 반환 시 state='cancel'
+        // → executed_volume > 0 이면 실제 체결된 것이므로 포지션 등록 필요
+        const executedVolume = parseFloat(info.executed_volume) || 0;
+        if (executedVolume > 0) {
+          // 업비트: /v1/order 단건 조회 시 시장가(ord_type='price')는 executed_funds가 undefined
+          // → trades 배열에서 funds 합산으로 fallback
+          let executedFunds = parseFloat(info.executed_funds || 0);
+          if (!executedFunds && info.trades && info.trades.length > 0) {
+            executedFunds = info.trades.reduce((sum, t) => sum + parseFloat(t.funds || 0), 0);
           }
-          // 업비트: executed_funds = 순수 체결금액 (수수료 별도)
-          const executedFunds = parseFloat(info.executed_funds || 0);
           const paidFee = parseFloat(info.paid_fee || 0);
           // 실제 진입가 = 체결금액 / 체결수량 (수수료 제외 순단가)
           const entryPrice = executedFunds / executedVolume;
@@ -491,7 +491,8 @@ async function checkPendingOrders() {
             obImpulse: `WH score:${order.score}`,
           }).catch(() => {});
         } else {
-          log(`${coin} 주문 취소됨`, 'warn');
+          // 진짜 미체결 취소 (executed_volume === 0)
+          log(`${coin} 주문 미체결 취소 (체결량 0)`, 'warn');
         }
 
         delete pendingOrders[coin];
@@ -807,6 +808,7 @@ function updateConfig(newCfg) {
 }
 
 function getState() {
+  if (!state) return { positions: [], running: false, enabled: false, totalPnl: 0, totalTrades: 0, wins: 0, losses: 0, dailyPnl: [], watchlist: [], logs: [] };
   return {
     ...state,
     running,
@@ -823,6 +825,34 @@ function getLogs() {
   return logBuffer.slice(-100);
 }
 
+// ── 포지션 수동 등록 (기존 보유종목 편입) ────────
+function addPosition(pos) {
+  if (!state) return { error: 'engine not started' };
+  if (state.positions.some(p => p.coin === pos.coin)) return { error: `${pos.coin} already exists` };
+  const tpPct = config.tpPct || 0.5;
+  const slPct = config.slPct || 0.5;
+  const position = {
+    coin: pos.coin,
+    market: pos.market || `KRW-${pos.coin}`,
+    entryPrice: pos.entryPrice,
+    tpPrice: pos.tpPrice || upbit.roundToTick(pos.entryPrice * (1 + tpPct / 100), 'up'),
+    slPrice: pos.slPrice || upbit.roundToTick(pos.entryPrice * (1 - slPct / 100), 'down'),
+    amount: Math.round(pos.entryPrice * pos.volume),
+    totalCost: pos.totalCost || pos.entryPrice * pos.volume * (1 + FEE_RATE),
+    buyFee: pos.buyFee || pos.entryPrice * pos.volume * FEE_RATE,
+    volume: pos.volume,
+    orderId: pos.orderId || `manual-${Date.now()}`,
+    entryTime: pos.entryTime || new Date().toISOString(),
+    score: pos.score || 0,
+    highSinceEntry: pos.entryPrice,
+    signal: pos.signal || { dip: 0, avgRange: 0, rsi: 50 },
+  };
+  state.positions.push(position);
+  saveState();
+  log(`포지션 수동 등록: ${pos.coin} @ ${pos.entryPrice}원 × ${pos.volume}개`);
+  return { ok: true, position };
+}
+
 // ── 유틸 ────────────────────────────────────────
 function sleep(ms) { return new Promise(r => setTimeout(r, ms)); }
 
@@ -836,4 +866,5 @@ module.exports = {
   getState,
   getLogs,
   onPriceUpdate,
+  addPosition,
 };

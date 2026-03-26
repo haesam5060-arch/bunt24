@@ -1258,6 +1258,12 @@ app.post('/api/wh/update-config', (req, res) => {
   }
 });
 
+app.post('/api/wh/add-position', (req, res) => {
+  const result = waveHarvest.addPosition(req.body);
+  if (result.error) return res.status(400).json(result);
+  res.json(result);
+});
+
 app.post('/api/reset', (req, res) => {
   if (state.positions.length > 0) {
     return res.status(400).json({ error: '보유 포지션이 있으면 초기화할 수 없습니다. 먼저 전체 매도하세요.' });
