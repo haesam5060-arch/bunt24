@@ -370,7 +370,7 @@ async function executeEntry(signal) {
     // TP/SL 가격 계산
     const tpPct = config.tpPct || 0.5;
     const slPct = config.slPct || 0.5;
-    const tpPrice = upbit.roundToTick(price * (1 + tpPct / 100), 'down');
+    const tpPrice = upbit.roundToTick(price * (1 + tpPct / 100), 'up');
     const slPrice = upbit.roundToTick(price * (1 - slPct / 100), 'down');
 
     // 시장가 매수 (초단타이므로 시장가로 즉시 체결)
@@ -433,11 +433,13 @@ async function checkPendingOrders() {
           const totalCost = executedFunds + paidFee;
 
           // TP/SL 재계산 (실제 체결가 기준)
-          let tpPrice = upbit.roundToTick(entryPrice * (1 + order.tpPct / 100), 'down');
+          // TP는 올림(up), SL은 내림(down) — 호가 단위로 인해 진입가와 같아지는 것 방지
+          let tpPrice = upbit.roundToTick(entryPrice * (1 + order.tpPct / 100), 'up');
           let slPrice = upbit.roundToTick(entryPrice * (1 - order.slPct / 100), 'down');
-          // TP와 SL이 같으면 TP를 1틱 올림
-          if (tpPrice <= slPrice) {
-            tpPrice = upbit.roundToTick(entryPrice * (1 + order.tpPct / 100), 'up');
+          // TP가 진입가 이하면 1틱 위로 강제 조정
+          const entryTick = upbit.roundToTick(entryPrice, 'up');
+          if (tpPrice <= entryTick) {
+            tpPrice = upbit.roundToTick(entryTick + 1, 'up');
           }
 
           const position = {
@@ -587,8 +589,32 @@ async function executeExit(pos, reason, currentPrice) {
       return;
     }
 
+    // 최소 주문금액(5,000원) 체크 — 미달 시 조용히 스킵 (가격 회복 대기)
+    const estimatedSellAmount = sellVolume * currentPrice;
+    if (estimatedSellAmount < 5000) {
+      // 3분에 1번만 로그 (에러 폭주 방지)
+      if (!pos._lastMinAmtLog || Date.now() - pos._lastMinAmtLog > 180000) {
+        log(`${pos.coin} 매도금액 ${Math.round(estimatedSellAmount)}원 < 5,000원 — 가격 회복 대기`, 'warn');
+        pos._lastMinAmtLog = Date.now();
+      }
+      return;
+    }
+
     // 시장가 매도
-    const sellResult = await upbit.sellMarket(apiKeys.accessKey, apiKeys.secretKey, pos.market, sellVolume);
+    let sellResult;
+    try {
+      sellResult = await upbit.sellMarket(apiKeys.accessKey, apiKeys.secretKey, pos.market, sellVolume);
+    } catch (sellErr) {
+      // 최소 주문금액 미달 등 — 3분에 1번만 로그
+      if (sellErr.message && sellErr.message.includes('5000')) {
+        if (!pos._lastMinAmtLog || Date.now() - pos._lastMinAmtLog > 180000) {
+          log(`${pos.coin} 매도 최소금액 미달 — 가격 회복 대기`, 'warn');
+          pos._lastMinAmtLog = Date.now();
+        }
+        return;
+      }
+      throw sellErr;
+    }
 
     if (!sellResult || !sellResult.uuid) {
       log(`${pos.coin} 매도 주문 실패`, 'error');
@@ -602,15 +628,20 @@ async function executeExit(pos, reason, currentPrice) {
       await sleep(2000);
       try {
         const orderInfo = await upbit.getOrder(apiKeys.accessKey, apiKeys.secretKey, sellResult.uuid);
-        if (orderInfo.state === 'done') {
-          // 업비트 매도: executed_funds = 실제 입금액 (수수료 차감 후)
-          const executedFunds = parseFloat(orderInfo.executed_funds || 0);
-          const executedVol = parseFloat(orderInfo.executed_volume || sellVolume);
+        // 시장가 매도도 state='cancel'(부분체결)일 수 있음
+        if (orderInfo.state === 'done' || orderInfo.state === 'cancel') {
+          const executedVol = parseFloat(orderInfo.executed_volume || 0);
+          if (executedVol <= 0) continue; // 진짜 미체결
+          // executed_funds가 undefined일 수 있음 — trades 배열에서 fallback
+          let executedFunds = parseFloat(orderInfo.executed_funds || 0);
+          if (!executedFunds && orderInfo.trades && orderInfo.trades.length > 0) {
+            executedFunds = orderInfo.trades.reduce((sum, t) => sum + parseFloat(t.funds || 0), 0);
+          }
           const paidFee = parseFloat(orderInfo.paid_fee || 0);
-          if (executedVol > 0) {
-            // 순매도가 = (입금액 + 수수료) / 체결수량 (수수료 전 단가)
+          if (executedFunds > 0) {
+            // 매도: executed_funds = 수수료 차감 후 입금액, gross = funds + fee
             exitPrice = (executedFunds + paidFee) / executedVol;
-            actualSellAmount = executedFunds; // 실제 입금액
+            actualSellAmount = executedFunds;
           }
           break;
         }
