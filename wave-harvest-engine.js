@@ -589,12 +589,20 @@ async function executeExit(pos, reason, currentPrice) {
       return;
     }
 
-    // 최소 주문금액(5,000원) 체크 — 미달 시 조용히 스킵 (가격 회복 대기)
+    // 최소 주문금액(5,000원) 체크 — 미달 시 가격 회복 대기
     const estimatedSellAmount = sellVolume * currentPrice;
     if (estimatedSellAmount < 5000) {
-      // 3분에 1번만 로그 (에러 폭주 방지)
+      const holdMs = Date.now() - new Date(pos.entryTime).getTime();
+      const holdMin = holdMs / 60000;
+      // 타임아웃(5분)의 2배(10분) 초과 시 매도 불가 포지션으로 강제 제거
+      if (holdMin > (config.timeoutMinutes || 5) * 2) {
+        log(`${pos.coin} 매도금액 ${Math.round(estimatedSellAmount)}원 < 5,000원, ${Math.round(holdMin)}분 보유 — 매도 불가 강제 정리`, 'warn');
+        removePosition(pos, reason, currentPrice, 0);
+        return;
+      }
+      // 3분에 1번만 로그
       if (!pos._lastMinAmtLog || Date.now() - pos._lastMinAmtLog > 180000) {
-        log(`${pos.coin} 매도금액 ${Math.round(estimatedSellAmount)}원 < 5,000원 — 가격 회복 대기`, 'warn');
+        log(`${pos.coin} 매도금액 ${Math.round(estimatedSellAmount)}원 < 5,000원 — 가격 회복 대기 (${Math.round(holdMin)}분 보유)`, 'warn');
         pos._lastMinAmtLog = Date.now();
       }
       return;
@@ -605,10 +613,17 @@ async function executeExit(pos, reason, currentPrice) {
     try {
       sellResult = await upbit.sellMarket(apiKeys.accessKey, apiKeys.secretKey, pos.market, sellVolume);
     } catch (sellErr) {
-      // 최소 주문금액 미달 등 — 3분에 1번만 로그
+      // 최소 주문금액 미달 등
       if (sellErr.message && sellErr.message.includes('5000')) {
+        const holdMs = Date.now() - new Date(pos.entryTime).getTime();
+        const holdMin = holdMs / 60000;
+        if (holdMin > (config.timeoutMinutes || 5) * 2) {
+          log(`${pos.coin} API 매도 거부 + ${Math.round(holdMin)}분 보유 — 강제 정리`, 'warn');
+          removePosition(pos, reason, currentPrice, 0);
+          return;
+        }
         if (!pos._lastMinAmtLog || Date.now() - pos._lastMinAmtLog > 180000) {
-          log(`${pos.coin} 매도 최소금액 미달 — 가격 회복 대기`, 'warn');
+          log(`${pos.coin} 매도 최소금액 미달 — 가격 회복 대기 (${Math.round(holdMin)}분)`, 'warn');
           pos._lastMinAmtLog = Date.now();
         }
         return;
