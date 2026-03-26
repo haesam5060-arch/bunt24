@@ -596,8 +596,8 @@ async function executeExit(pos, reason, currentPrice) {
       const holdMin = holdMs / 60000;
       // 타임아웃(5분)의 2배(10분) 초과 시 매도 불가 포지션으로 강제 제거
       if (holdMin > (config.timeoutMinutes || 5) * 2) {
-        log(`${pos.coin} 매도금액 ${Math.round(estimatedSellAmount)}원 < 5,000원, ${Math.round(holdMin)}분 보유 — 매도 불가 강제 정리`, 'warn');
-        removePosition(pos, reason, currentPrice, 0);
+        log(`${pos.coin} 매도금액 ${Math.round(estimatedSellAmount)}원 < 5,000원, ${Math.round(holdMin)}분 보유 — 매도 불가 강제 정리 (미매도)`, 'warn');
+        removePosition(pos, 'UNSOLD', currentPrice, -1); // sellAmount=-1: 미매도 표시
         return;
       }
       // 3분에 1번만 로그
@@ -618,8 +618,8 @@ async function executeExit(pos, reason, currentPrice) {
         const holdMs = Date.now() - new Date(pos.entryTime).getTime();
         const holdMin = holdMs / 60000;
         if (holdMin > (config.timeoutMinutes || 5) * 2) {
-          log(`${pos.coin} API 매도 거부 + ${Math.round(holdMin)}분 보유 — 강제 정리`, 'warn');
-          removePosition(pos, reason, currentPrice, 0);
+          log(`${pos.coin} API 매도 거부 + ${Math.round(holdMin)}분 보유 — 강제 정리 (미매도)`, 'warn');
+          removePosition(pos, 'UNSOLD', currentPrice, -1);
           return;
         }
         if (!pos._lastMinAmtLog || Date.now() - pos._lastMinAmtLog > 180000) {
@@ -677,27 +677,33 @@ async function executeExit(pos, reason, currentPrice) {
 
 // ── 포지션 제거 + 기록 ──────────────────────────
 function removePosition(pos, reason, exitPrice, sellAmount) {
-  // 정확한 PnL: 실제 입금액 - 실제 총비용
-  // sellAmount = 매도 후 실제 입금액 (수수료 차감됨), pos.totalCost = 매수 총비용 (수수료 포함)
+  // sellAmount === -1: 미매도 강제 정리 (PnL 기록 안 함)
+  const unsold = sellAmount === -1;
   const buyCost = pos.totalCost || (pos.amount || pos.entryPrice * pos.volume * (1 + FEE_RATE));
-  const sellReceived = sellAmount || (exitPrice * pos.volume * (1 - FEE_RATE));
-  const pnl = Math.round(sellReceived - buyCost);
-  const pnlPct = buyCost > 0 ? ((sellReceived - buyCost) / buyCost * 100) : 0;
+  const sellReceived = unsold ? 0 : (sellAmount || (exitPrice * pos.volume * (1 - FEE_RATE)));
+  const pnl = unsold ? 0 : Math.round(sellReceived - buyCost);
+  const pnlPct = unsold ? 0 : (buyCost > 0 ? ((sellReceived - buyCost) / buyCost * 100) : 0);
 
   const holdMs = Date.now() - new Date(pos.entryTime).getTime();
   const holdSec = Math.round(holdMs / 1000);
 
-  const reasonLabel = { TP: '익절', SL: '손절', TRAIL: '트레일', TIMEOUT: '타임아웃' }[reason] || reason;
+  const reasonLabel = { TP: '익절', SL: '손절', TRAIL: '트레일', TIMEOUT: '타임아웃', UNSOLD: '미매도정리' }[reason] || reason;
   const icon = pnl > 0 ? '+' : '';
   log(`매도 [${reasonLabel}]: ${pos.coin} @ ${exitPrice.toLocaleString()}원 | ${icon}${pnl.toLocaleString()}원 (${icon}${pnlPct.toFixed(2)}%) | ${holdSec}초 보유`);
 
   // state 업데이트
   state.positions = state.positions.filter(p => p.orderId !== pos.orderId);
-  state.totalTrades++;
-  state.totalPnl += pnl;
-  state.todayPnl += pnl;
 
-  if (pnl > 0) {
+  // 미매도 정리는 통계에서 제외
+  if (!unsold) {
+    state.totalTrades++;
+    state.totalPnl += pnl;
+    state.todayPnl += pnl;
+  }
+
+  if (unsold) {
+    // 미매도: 통계 미반영, 포지션만 제거
+  } else if (pnl > 0) {
     state.wins++;
     state.consecutiveLosses = 0;
   } else {
